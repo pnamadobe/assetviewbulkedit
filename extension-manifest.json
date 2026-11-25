@@ -1,0 +1,22 @@
+{
+  "name": "aem-assets-bulk-metadata",
+  "id": "aem-assets-bulk-metadata",
+  "description": "Schema-driven bulk metadata editor for AEM Assets View — edits all metadata fields common to the selected assets, just like Admin View.",
+  "version": "0.1.0",
+  "actionBarActions": [
+    {
+      "id": "bulk-edit-metadata",
+      "label": "Bulk Edit Metadata",
+      "icon": "Edit",
+      "needsModal": true,
+      "modalTitle": "Bulk Edit Metadata",
+      "modalType": "fullscreen",
+      "componentName": "BulkMetadataModal"
+    }
+  ],
+  "runtimeActions": [
+    {
+      "name": "aem-metadata-proxy"
+    }
+  ]
+}

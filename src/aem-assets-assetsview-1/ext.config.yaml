@@ -1,0 +1,22 @@
+operations:
+  view:
+    - type: web
+      impl: index.html
+actions: actions
+web: web-src
+hooks:
+  post-app-deploy: ./hooks/post-deploy.js
+runtimeManifest:
+  packages:
+    aem-assets-bulk-metadata:
+      license: Apache-2.0
+      actions:
+        aem-metadata-proxy:
+          function: actions/aem-metadata-proxy/index.js
+          web: 'yes'
+          runtime: nodejs:20
+          inputs:
+            LOG_LEVEL: $LOG_LEVEL
+          annotations:
+            require-adobe-auth: true
+            final: true
