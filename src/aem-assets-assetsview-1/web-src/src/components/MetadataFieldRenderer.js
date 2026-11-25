@@ -1,39 +1,71 @@
 import React, { useState } from 'react';
 import {
   ActionButton,
-  Badge,
   Checkbox,
   Flex,
   Item,
   Picker,
   Radio,
   RadioGroup,
+  StatusLight,
   Text,
   TextArea,
   TextField,
+  Tooltip,
+  TooltipTrigger,
   View
 } from '@adobe/react-spectrum';
+import Undo from '@spectrum-icons/workflow/Undo';
 
 const MIXED_PLACEHOLDER = '<Mixed Entries>';
 
-function FieldHeader({ field, initialState, isDirty, onReset }) {
+function FieldLabelRow({ field, initialState, isDirty, onReset }) {
   return (
-    <Flex alignItems="center" justifyContent="space-between" marginBottom="size-50">
-      <Flex alignItems="center" gap="size-100">
-        <Text UNSAFE_style={{ fontWeight: 600, fontSize: 13 }}>
+    <Flex alignItems="center" justifyContent="space-between" marginBottom="size-50" minHeight="size-300">
+      <Flex alignItems="center" gap="size-100" wrap>
+        <Text
+          UNSAFE_style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: 'var(--spectrum-alias-label-text-color, var(--spectrum-global-color-gray-700))'
+          }}
+        >
           {field.label}
-          {field.required ? ' *' : ''}
+          {field.required ? (
+            <span style={{ color: 'var(--spectrum-global-color-red-600)', marginLeft: 2 }}>*</span>
+          ) : null}
         </Text>
-        <Text UNSAFE_style={{ fontSize: 11, opacity: 0.65 }}>{field.property}</Text>
-        {initialState?.isMixed && !isDirty && (
-          <Badge variant="info">Mixed Entries</Badge>
-        )}
-        {isDirty && <Badge variant="positive">Modified</Badge>}
+
+        {isDirty ? (
+          <StatusLight
+            variant="info"
+            UNSAFE_style={{ paddingBlock: 0, minHeight: 'auto', fontSize: 11 }}
+          >
+            Modified
+          </StatusLight>
+        ) : initialState?.isMixed ? (
+          <StatusLight
+            variant="neutral"
+            UNSAFE_style={{ paddingBlock: 0, minHeight: 'auto', fontSize: 11 }}
+          >
+            Mixed
+          </StatusLight>
+        ) : null}
       </Flex>
+
       {isDirty && (
-        <ActionButton isQuiet onPress={onReset} UNSAFE_style={{ height: 24 }}>
-          Reset
-        </ActionButton>
+        <TooltipTrigger delay={300}>
+          <ActionButton
+            isQuiet
+            aria-label={`Reset ${field.label}`}
+            onPress={onReset}
+            UNSAFE_style={{ height: 24, minWidth: 24 }}
+          >
+            <Undo size="XS" />
+            <Text UNSAFE_style={{ fontSize: 12 }}>Reset</Text>
+          </ActionButton>
+          <Tooltip>Discard changes to {field.label}</Tooltip>
+        </TooltipTrigger>
       )}
     </Flex>
   );
@@ -95,34 +127,20 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
     });
   };
 
-  const chipStyle = (variant) => ({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '3px 10px',
-    borderRadius: 12,
-    fontSize: 12,
-    border: '1px solid var(--spectrum-global-color-gray-400)',
-    backgroundColor:
-      variant === 'added'
-        ? 'var(--spectrum-global-color-blue-100)'
-        : variant === 'removed'
-        ? 'var(--spectrum-global-color-red-100)'
-        : variant === 'partial'
-        ? 'var(--spectrum-global-color-gray-100)'
-        : 'var(--spectrum-global-color-gray-200)',
-    textDecoration: variant === 'removed' ? 'line-through' : 'none',
-    opacity: variant === 'partial' ? 0.8 : 1
-  });
-
   return (
     <View
-      padding="size-150"
+      padding="size-200"
+      backgroundColor="gray-50"
       borderWidth="thin"
       borderColor={isDirty ? 'blue-500' : 'gray-300'}
-      borderRadius="medium"
+      borderRadius="regular"
     >
-      <FieldHeader field={field} initialState={initialState} isDirty={isDirty} onReset={onReset} />
+      <FieldLabelRow
+        field={field}
+        initialState={initialState}
+        isDirty={isDirty}
+        onReset={onReset}
+      />
 
       <RadioGroup
         aria-label={`${field.label} update mode`}
@@ -131,17 +149,17 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
         onChange={handleModeChange}
         marginBottom="size-100"
       >
-        <Radio value="append">Append / Remove (preserve existing per-asset values)</Radio>
+        <Radio value="append">Append / Remove (preserve existing values)</Radio>
         <Radio value="replace">Replace all values</Radio>
       </RadioGroup>
 
-      <Flex gap="size-100" alignItems="end" marginBottom="size-100">
+      <Flex gap="size-100" alignItems="end" marginBottom="size-125">
         <TextField
           aria-label={`Add ${field.label}`}
           placeholder={
             field.type === 'tags'
-              ? 'Add tag (e.g. brand:spring-2026) and press Enter'
-              : `Add ${field.label.toLowerCase()} and press Enter`
+              ? 'Enter tag (e.g. brand:spring-2026) and press Enter'
+              : `Enter ${field.label.toLowerCase()} and press Enter`
           }
           value={draft}
           onChange={setDraft}
@@ -163,18 +181,15 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
           commonValues.map((val) => {
             const isRemoved = removedValues.includes(val);
             return (
-              <span key={`common-${val}`} style={chipStyle(isRemoved ? 'removed' : 'common')}>
+              <span
+                key={`common-${val}`}
+                className={`aem-spectrum-chip ${isRemoved ? 'aem-spectrum-chip--removed' : ''}`}
+              >
                 <span>{val}</span>
                 <button
                   type="button"
+                  className="aem-spectrum-chip-btn"
                   onClick={() => toggleRemoveExisting(val)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                    padding: 0,
-                    fontWeight: 700
-                  }}
                   title={isRemoved ? 'Undo remove' : 'Remove from all selected assets'}
                 >
                   {isRemoved ? '↺' : '×'}
@@ -189,20 +204,16 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
             return (
               <span
                 key={`partial-${val}`}
-                style={chipStyle(isRemoved ? 'removed' : 'partial')}
+                className={`aem-spectrum-chip ${
+                  isRemoved ? 'aem-spectrum-chip--removed' : 'aem-spectrum-chip--partial'
+                }`}
                 title="Present on some (not all) selected assets"
               >
-                <span>{val} (partial)</span>
+                <span>{val}</span>
                 <button
                   type="button"
+                  className="aem-spectrum-chip-btn"
                   onClick={() => toggleRemoveExisting(val)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                    padding: 0,
-                    fontWeight: 700
-                  }}
                   title={isRemoved ? 'Undo remove' : 'Remove from assets that have this value'}
                 >
                   {isRemoved ? '↺' : '×'}
@@ -212,27 +223,27 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
           })}
 
         {addedValues.map((val) => (
-          <span key={`added-${val}`} style={chipStyle('added')}>
+          <span key={`added-${val}`} className="aem-spectrum-chip aem-spectrum-chip--added">
             <span>
               {mode === 'append' ? '+ ' : ''}
               {val}
             </span>
             <button
               type="button"
+              className="aem-spectrum-chip-btn"
               onClick={() => removeAdded(val)}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                padding: 0,
-                fontWeight: 700
-              }}
               title="Remove"
             >
               ×
             </button>
           </span>
         ))}
+
+        {commonValues.length === 0 && partialValues.length === 0 && addedValues.length === 0 && (
+          <Text UNSAFE_style={{ fontSize: 12, opacity: 0.65 }}>
+            No {field.label.toLowerCase()} applied yet.
+          </Text>
+        )}
       </Flex>
     </View>
   );
@@ -249,13 +260,15 @@ export default function MetadataFieldRenderer({
 
   if (field.multiValue) {
     return (
-      <MultiValueField
-        field={field}
-        initialState={initialState}
-        edit={edit}
-        onChange={onChange}
-        onReset={onReset}
-      />
+      <div className="aem-bulk-field-wide">
+        <MultiValueField
+          field={field}
+          initialState={initialState}
+          edit={edit}
+          onChange={onChange}
+          onReset={onReset}
+        />
+      </div>
     );
   }
 
@@ -266,17 +279,15 @@ export default function MetadataFieldRenderer({
     : initialState?.sharedValue ?? '';
 
   const placeholder = !isDirty && initialState?.isMixed ? MIXED_PLACEHOLDER : '';
+  const isWide = field.type === 'textarea';
+
+  const wrapperClass = isWide ? 'aem-bulk-field-wide' : undefined;
 
   if (field.type === 'boolean') {
     const isIndeterminate = !isDirty && Boolean(initialState?.isMixed);
     return (
-      <View
-        padding="size-150"
-        borderWidth="thin"
-        borderColor={isDirty ? 'blue-500' : 'gray-300'}
-        borderRadius="medium"
-      >
-        <FieldHeader
+      <div className={wrapperClass}>
+        <FieldLabelRow
           field={field}
           initialState={initialState}
           isDirty={isDirty}
@@ -289,19 +300,14 @@ export default function MetadataFieldRenderer({
         >
           {field.label}
         </Checkbox>
-      </View>
+      </div>
     );
   }
 
   if (field.type === 'select' && Array.isArray(field.options) && field.options.length > 0) {
     return (
-      <View
-        padding="size-150"
-        borderWidth="thin"
-        borderColor={isDirty ? 'blue-500' : 'gray-300'}
-        borderRadius="medium"
-      >
-        <FieldHeader
+      <div className={wrapperClass}>
+        <FieldLabelRow
           field={field}
           initialState={initialState}
           isDirty={isDirty}
@@ -318,19 +324,14 @@ export default function MetadataFieldRenderer({
             <Item key={opt.value}>{opt.label}</Item>
           ))}
         </Picker>
-      </View>
+      </div>
     );
   }
 
   if (field.type === 'textarea') {
     return (
-      <View
-        padding="size-150"
-        borderWidth="thin"
-        borderColor={isDirty ? 'blue-500' : 'gray-300'}
-        borderRadius="medium"
-      >
-        <FieldHeader
+      <div className={wrapperClass}>
+        <FieldLabelRow
           field={field}
           initialState={initialState}
           isDirty={isDirty}
@@ -343,19 +344,14 @@ export default function MetadataFieldRenderer({
           value={String(currentValue ?? '')}
           onChange={(val) => onChange({ value: val })}
         />
-      </View>
+      </div>
     );
   }
 
   if (field.type === 'date') {
     return (
-      <View
-        padding="size-150"
-        borderWidth="thin"
-        borderColor={isDirty ? 'blue-500' : 'gray-300'}
-        borderRadius="medium"
-      >
-        <FieldHeader
+      <div className={wrapperClass}>
+        <FieldLabelRow
           field={field}
           initialState={initialState}
           isDirty={isDirty}
@@ -365,32 +361,26 @@ export default function MetadataFieldRenderer({
           <input
             type="date"
             aria-label={field.label}
+            className="aem-spectrum-date-input"
             value={String(currentValue ?? '')}
             onChange={(e) => onChange({ value: e.target.value })}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 4,
-              border: '1px solid var(--spectrum-global-color-gray-400)',
-              fontSize: 14,
-              minWidth: 200
-            }}
           />
           {!isDirty && initialState?.isMixed && (
             <Text UNSAFE_style={{ fontSize: 12, opacity: 0.7 }}>{MIXED_PLACEHOLDER}</Text>
           )}
         </Flex>
-      </View>
+      </div>
     );
   }
 
   return (
-    <View
-      padding="size-150"
-      borderWidth="thin"
-      borderColor={isDirty ? 'blue-500' : 'gray-300'}
-      borderRadius="medium"
-    >
-      <FieldHeader field={field} initialState={initialState} isDirty={isDirty} onReset={onReset} />
+    <div className={wrapperClass}>
+      <FieldLabelRow
+        field={field}
+        initialState={initialState}
+        isDirty={isDirty}
+        onReset={onReset}
+      />
       <TextField
         aria-label={field.label}
         width="100%"
@@ -399,6 +389,6 @@ export default function MetadataFieldRenderer({
         value={String(currentValue ?? '')}
         onChange={(val) => onChange({ value: val })}
       />
-    </View>
+    </div>
   );
 }

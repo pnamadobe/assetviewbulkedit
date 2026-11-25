@@ -16,6 +16,7 @@ import {
 import { extensionId } from './Constants';
 import {
   fetchAllAssetsMetadata,
+  fetchAssetThumbnails,
   fetchSchemaRegistry,
   saveBulkMetadata
 } from '../services/aemClient';
@@ -31,6 +32,7 @@ export default function BulkMetadataModal() {
   const [loadError, setLoadError] = useState(null);
 
   const [assets, setAssets] = useState([]);
+  const [thumbnailsById, setThumbnailsById] = useState({});
   const [schemaRegistry, setSchemaRegistry] = useState(null);
 
   const [saving, setSaving] = useState(false);
@@ -78,7 +80,7 @@ export default function BulkMetadataModal() {
           fetchAllAssetsMetadata(resources, auth, (completed, total) => {
             if (active) setLoadProgress({ completed, total });
           }),
-          fetchSchemaRegistry(auth)
+          fetchSchemaRegistry(auth, resources)
         ]);
 
         if (!active) return;
@@ -89,6 +91,13 @@ export default function BulkMetadataModal() {
         } else {
           setAssets(metadataResult.assets);
           setSchemaRegistry(registry);
+
+          // Lazily load small thumbnails in the background without blocking editor open
+          fetchAssetThumbnails(metadataResult.assets, auth, (assetId, dataUrl) => {
+            if (active) {
+              setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
+            }
+          });
         }
       } catch (err) {
         if (active) {
@@ -108,15 +117,15 @@ export default function BulkMetadataModal() {
     guestConnection?.host?.modal?.closeDialog();
   };
 
-  const handleSave = async (dirtyEdits, fieldsByProperty) => {
-    if (!authContext) return;
+  const handleSave = async (activeAssets, dirtyEdits, fieldsByProperty) => {
+    if (!authContext || !activeAssets?.length) return;
     setSaving(true);
     setSaveResult(null);
-    setSaveProgress({ completed: 0, total: assets.length });
+    setSaveProgress({ completed: 0, total: activeAssets.length });
 
     try {
       const result = await saveBulkMetadata(
-        assets,
+        activeAssets,
         dirtyEdits,
         fieldsByProperty,
         authContext,
@@ -191,6 +200,7 @@ export default function BulkMetadataModal() {
       ) : (
         <BulkMetadataEditor
           assets={assets}
+          thumbnailsById={thumbnailsById}
           schemaRegistry={schemaRegistry}
           onSave={handleSave}
           onCancel={closeDialog}

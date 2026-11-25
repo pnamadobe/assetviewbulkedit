@@ -162,13 +162,114 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
 }
 
 /**
- * Loads custom metadata forms from AEM Author (trying Assets View forms first,
- * then Admin View metadata schemas) and merges with built-in defaults.
+ * Extracts unique parent folder paths from an array of resources/assets.
  */
-export async function fetchSchemaRegistry(authContext) {
+function extractUniqueParentFolders(resources = []) {
+  const folders = new Set();
+  for (const r of resources) {
+    if (!r?.path || typeof r.path !== 'string') continue;
+    const parts = r.path.split('/').filter(Boolean);
+    parts.pop(); // remove filename
+    if (parts.length >= 2) {
+      folders.add('/' + parts.join('/'));
+    }
+  }
+  return Array.from(folders);
+}
+
+/**
+ * Queries folder `jcr:content` ancestors for folder-assigned metadata schemas.
+ * When all selected assets are in the same folder, only a single lookup is performed.
+ */
+async function fetchFolderSchemas(resources, authContext) {
+  const { aemHost, accessToken, apiKey } = authContext;
+  const proxyUrl = getProxyUrl();
+  const uniqueFolders = extractUniqueParentFolders(resources);
+
+  const formsById = {};
+  const folderAssignments = {};
+
+  await mapWithConcurrency(uniqueFolders, DEFAULT_CONCURRENCY, async (folderPath) => {
+    try {
+      let result = null;
+      if (proxyUrl) {
+        result = await callProxy(
+          proxyUrl,
+          {
+            operation: 'getFolderSchema',
+            aemHost: normalizeHost(aemHost),
+            folderPath,
+            apiKey
+          },
+          authContext
+        );
+      } else {
+        // Direct mode: walk up ancestor folders checking jcr:content.json
+        const parts = folderPath.split('/').filter(Boolean);
+        while (parts.length >= 2) {
+          const candidate = '/' + parts.join('/');
+          const encoded = candidate.split('/').map(encodeURIComponent).join('/');
+          const resp = await fetch(`${normalizeHost(aemHost)}${encoded}/jcr:content.json`, {
+            method: 'GET',
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Bearer ${accessToken}`
+            }
+          });
+          if (resp.ok) {
+            const jcr = await resp.json().catch(() => null);
+            const ref =
+              jcr?.assetsViewMetadataForm ||
+              jcr?.metadataForm ||
+              jcr?.metadataSchema ||
+              jcr?.['dam:metadataSchema'];
+            if (typeof ref === 'string' && ref.trim()) {
+              result = {
+                found: true,
+                assignedAt: candidate,
+                schemaRef: ref.trim(),
+                formId: ref.trim().split('/').filter(Boolean).pop().toLowerCase(),
+                formNode: null
+              };
+              break;
+            }
+          }
+          parts.pop();
+        }
+      }
+
+      if (result?.found && result.formId && result.assignedAt) {
+        folderAssignments[result.assignedAt] = result.formId;
+        if (result.formNode) {
+          const parsed = parseAemSchemaTree({ [result.formId]: result.formNode });
+          Object.assign(formsById, parsed.formsById);
+        }
+      }
+    } catch {
+      // Non-fatal: fall back to forms tree or MIME-type defaults
+    }
+  });
+
+  return { formsById, folderAssignments };
+}
+
+/**
+ * Loads custom metadata forms from AEM Author (folder `jcr:content` assignments +
+ * Assets View metadata forms + Admin View metadata schemas) and merges with defaults.
+ */
+export async function fetchSchemaRegistry(authContext, resources = []) {
   const { aemHost, accessToken, apiKey } = authContext;
   const proxyUrl = getProxyUrl();
 
+  const mergedFormsById = {};
+  const mergedFolderAssignments = {};
+
+  // 1. Check folder-level metadata schema assignments on ancestor jcr:content nodes
+  const folderResult = await fetchFolderSchemas(resources, authContext);
+  Object.assign(mergedFormsById, folderResult.formsById);
+  Object.assign(mergedFolderAssignments, folderResult.folderAssignments);
+
+  // 2. Load organization metadata forms tree (Assets View first, then Admin View)
   for (const source of ['assetsview', 'admin']) {
     try {
       let formsTree = null;
@@ -205,8 +306,11 @@ export async function fetchSchemaRegistry(authContext) {
 
       if (formsTree) {
         const parsed = parseAemSchemaTree(formsTree);
+        Object.assign(mergedFormsById, parsed.formsById);
+        // Folder jcr:content assignments take precedence over form-node folderPaths
+        Object.assign(mergedFolderAssignments, parsed.folderAssignments, folderResult.folderAssignments);
         if (Object.keys(parsed.formsById).length > 0) {
-          return createSchemaRegistry(parsed);
+          break;
         }
       }
     } catch {
@@ -214,7 +318,43 @@ export async function fetchSchemaRegistry(authContext) {
     }
   }
 
-  return createSchemaRegistry();
+  return createSchemaRegistry({
+    formsById: mergedFormsById,
+    folderAssignments: mergedFolderAssignments
+  });
+}
+
+/**
+ * Lazily fetches small thumbnail data URLs for selected assets in the background.
+ * Calls `onThumbnail(assetId, dataUrl)` as each thumbnail resolves.
+ */
+export async function fetchAssetThumbnails(assets, authContext, onThumbnail) {
+  const { aemHost, apiKey } = authContext;
+  const proxyUrl = getProxyUrl();
+  if (!proxyUrl || !Array.isArray(assets) || assets.length === 0) {
+    return;
+  }
+
+  await mapWithConcurrency(assets, 4, async (asset) => {
+    try {
+      const res = await callProxy(
+        proxyUrl,
+        {
+          operation: 'getThumbnail',
+          aemHost: normalizeHost(aemHost),
+          assetId: asset.id,
+          assetPath: asset.path,
+          apiKey
+        },
+        authContext
+      );
+      if (res?.available && res.dataUrl && onThumbnail) {
+        onThumbnail(asset.id, res.dataUrl);
+      }
+    } catch {
+      // Non-fatal: UI keeps the Spectrum file-type icon fallback
+    }
+  });
 }
 
 /**

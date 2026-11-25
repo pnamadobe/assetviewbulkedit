@@ -1,7 +1,8 @@
 const {
   main,
   validateAemHost,
-  validateAssetId
+  validateAssetId,
+  validateDamPath
 } = require('../src/aem-assets-assetsview-1/actions/aem-metadata-proxy/index');
 
 describe('aem-metadata-proxy action', () => {
@@ -21,6 +22,14 @@ describe('aem-metadata-proxy action', () => {
     expect(validateAssetId('urn:aaid:aem:11111111-1111-4111-8111-111111111111')).toBe(true);
     expect(validateAssetId('../etc/passwd')).toBe(false);
     expect(validateAssetId('')).toBe(false);
+  });
+
+  test('validateDamPath only permits /content/dam paths without traversal', () => {
+    expect(validateDamPath('/content/dam/26H2/hilton-hgv/')).toBe('/content/dam/26H2/hilton-hgv');
+    expect(validateDamPath('/content/dam/brand/my folder')).toBe('/content/dam/brand/my folder');
+    expect(validateDamPath('/content/dam/../etc/passwd')).toBeNull();
+    expect(validateDamPath('/etc/passwd')).toBeNull();
+    expect(validateDamPath('')).toBeNull();
   });
 
   test('main rejects requests without Authorization header', async () => {

@@ -36,8 +36,8 @@ export default function DemoSandbox() {
     setLastPatches(null);
   };
 
-  const handleSave = (dirtyEdits, fieldsByProperty) => {
-    const patches = selectedAssets.map((asset) => ({
+  const handleSave = (activeAssets, dirtyEdits, fieldsByProperty) => {
+    const patches = activeAssets.map((asset) => ({
       id: asset.id,
       name: asset.name,
       etag: asset.etag,
