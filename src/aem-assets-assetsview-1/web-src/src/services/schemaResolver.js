@@ -215,16 +215,129 @@ function extractOptions(node) {
 }
 
 /**
- * Recursively collects field definitions from a Granite/JCR tab subtree.
+ * Extracts folder assignments from a form node or JSON file.
+ */
+function extractFolderAssignments(formObj, formId, folderAssignments) {
+  const lists = [
+    formObj?.folderPaths,
+    formObj?.assignedFolders,
+    formObj?.appliedFolders,
+    formObj?.folders,
+    formObj?.['dam:folderPaths']
+  ];
+  for (const list of lists) {
+    if (Array.isArray(list)) {
+      for (const entry of list) {
+        const folderPath = typeof entry === 'string' ? entry : entry?.path || entry?.folderPath;
+        if (typeof folderPath === 'string' && folderPath.startsWith('/content/dam')) {
+          folderAssignments[folderPath.replace(/\/+$/, '')] = formId;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Parses a single Assets View JSON form definition (e.g. from /content/dam/appdata/metadataforms/*.json).
+ */
+function parseAssetsViewFormJson(formKey, formObj, formsById, folderAssignments) {
+  if (!formObj || typeof formObj !== 'object') return;
+
+  // Handle folder-mapping JSON files (e.g., { "/content/dam/foo": "formName" } or { mappings: [...] })
+  const keys = Object.keys(formObj);
+  if (keys.length > 0 && keys.every((k) => k.startsWith('/content/dam'))) {
+    for (const [folderPath, ref] of Object.entries(formObj)) {
+      const refStr = typeof ref === 'string' ? ref : ref?.formId || ref?.formName || ref?.name;
+      if (typeof refStr === 'string' && refStr.trim()) {
+        const targetId = refStr
+          .trim()
+          .split('/')
+          .filter(Boolean)
+          .pop()
+          .replace(/\.json$/i, '')
+          .toLowerCase();
+        folderAssignments[folderPath.replace(/\/+$/, '')] = targetId;
+      }
+    }
+    return;
+  }
+
+  const tabs = [];
+  const rawTabs = Array.isArray(formObj.tabs)
+    ? formObj.tabs
+    : formObj.items?.tabs?.items || formObj.tabs?.items || formObj.tabs || formObj.items;
+
+  if (Array.isArray(rawTabs)) {
+    rawTabs.forEach((tabNode, idx) => {
+      if (!tabNode || typeof tabNode !== 'object') return;
+      const tabFields = collectFieldsFromNode(tabNode, []);
+      if (tabFields.length > 0) {
+        tabs.push({
+          id: String(tabNode.id || tabNode.name || `tab-${idx}`),
+          label: String(tabNode.label || tabNode.title || tabNode['jcr:title'] || `Tab ${idx + 1}`),
+          fields: tabFields
+        });
+      }
+    });
+  } else if (rawTabs && typeof rawTabs === 'object') {
+    for (const [tabKey, tabNode] of Object.entries(rawTabs)) {
+      if (tabKey.startsWith('jcr:') || tabKey.startsWith('sling:') || !tabNode || typeof tabNode !== 'object') {
+        continue;
+      }
+      const tabFields = collectFieldsFromNode(tabNode, []);
+      if (tabFields.length > 0) {
+        tabs.push({
+          id: tabKey,
+          label: String(tabNode.label || tabNode.title || tabNode['jcr:title'] || tabKey),
+          fields: tabFields
+        });
+      }
+    }
+  }
+
+  if (tabs.length > 0) {
+    const rawId = formObj.id || formObj.name || formKey;
+    const formId = String(rawId).replace(/\.json$/i, '').toLowerCase();
+    formsById[formId] = {
+      id: formId,
+      name: String(formObj.title || formObj['jcr:title'] || formObj.name || formKey.replace(/\.json$/i, '')),
+      tabs
+    };
+    extractFolderAssignments(formObj, formId, folderAssignments);
+  }
+}
+
+/**
+ * Recursively collects field definitions from an Assets View form or JCR tab subtree.
  */
 function collectFieldsFromNode(node, fields = []) {
   if (!node || typeof node !== 'object') return fields;
 
-  const rawProp = node.name || node.mapToProperty || node.property;
-  const property = normalizePropertyName(rawProp);
-  const label = node.fieldLabel || node.label || node['jcr:title'];
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectFieldsFromNode(item, fields);
+    }
+    return fields;
+  }
 
-  if (property && label && !node.readOnly && !node.disabled) {
+  const rawProp =
+    node.mapToProperty ||
+    node.propertyName ||
+    node.property ||
+    node.name ||
+    node.fieldName;
+  const property = normalizePropertyName(rawProp);
+  const label = node.fieldLabel || node.label || node.title || node['jcr:title'];
+
+  const isContainer =
+    Array.isArray(node.tabs) ||
+    Array.isArray(node.fields) ||
+    Array.isArray(node.children) ||
+    String(node.type || node.component || '').toLowerCase().includes('accordion') ||
+    String(node.type || node.component || '').toLowerCase().includes('section') ||
+    String(node.type || node.component || '').toLowerCase().includes('tab');
+
+  if (!isContainer && property && label && !node.readOnly && !node.disabled) {
     const { type, multiValue } = inferFieldType(node);
     const lowerLabel = String(label).toLowerCase();
     let options = extractOptions(node);
@@ -250,7 +363,13 @@ function collectFieldsFromNode(node, fields = []) {
   }
 
   for (const [key, child] of Object.entries(node)) {
-    if (key.startsWith('jcr:') || key.startsWith('sling:') || key === 'items' && property) {
+    if (
+      key.startsWith('jcr:') ||
+      key.startsWith('sling:') ||
+      (key === 'items' && !isContainer && property) ||
+      key === 'choices' ||
+      key === 'options'
+    ) {
       continue;
     }
     if (child && typeof child === 'object') {
@@ -262,62 +381,47 @@ function collectFieldsFromNode(node, fields = []) {
 }
 
 /**
- * Parses a JCR infinity.json tree from either Assets View metadataforms or Admin View metadataschema
- * into a schema registry: { formsById, folderAssignments }.
+ * Parses Assets View metadata forms from `/content/dam/appdata/metadataforms`
+ * (both JCR node trees and JSON form files) into `{ formsById, folderAssignments }`.
  */
-export function parseAemSchemaTree(formsTree) {
+export function parseAemSchemaTree(formsTree, formFiles = []) {
   const formsById = {};
   const folderAssignments = {};
+
+  // 1. Parse JSON form files fetched from /content/dam/appdata/metadataforms
+  if (Array.isArray(formFiles)) {
+    for (const file of formFiles) {
+      if (file?.content) {
+        parseAssetsViewFormJson(file.key || 'form', file.content, formsById, folderAssignments);
+      }
+    }
+  }
 
   if (!formsTree || typeof formsTree !== 'object') {
     return { formsById, folderAssignments };
   }
 
-  for (const [formKey, formNode] of Object.entries(formsTree)) {
-    if (formKey.startsWith('jcr:') || !formNode || typeof formNode !== 'object') {
-      continue;
-    }
+  // Support forms nested under /content/dam/appdata/metadataforms/assets or directly at root
+  const rootsToScan = [formsTree];
+  if (formsTree.assets && typeof formsTree.assets === 'object') {
+    rootsToScan.push(formsTree.assets);
+  }
 
-    const tabs = [];
-    const tabsRoot =
-      formNode.items?.tabs?.items ||
-      formNode.tabs?.items ||
-      formNode.items ||
-      formNode;
-
-    if (tabsRoot && typeof tabsRoot === 'object') {
-      for (const [tabKey, tabNode] of Object.entries(tabsRoot)) {
-        if (tabKey.startsWith('jcr:') || tabKey.startsWith('sling:') || !tabNode || typeof tabNode !== 'object') {
-          continue;
-        }
-        const tabFields = collectFieldsFromNode(tabNode, []);
-        if (tabFields.length > 0) {
-          tabs.push({
-            id: tabKey,
-            label: tabNode['jcr:title'] || tabNode.title || tabKey,
-            fields: tabFields
-          });
-        }
+  for (const root of rootsToScan) {
+    for (const [formKey, formNode] of Object.entries(root)) {
+      if (
+        formKey.startsWith('jcr:') ||
+        formKey.startsWith('sling:') ||
+        formKey === 'assets' ||
+        formKey === 'folders' ||
+        formKey === 'collections' ||
+        !formNode ||
+        typeof formNode !== 'object'
+      ) {
+        continue;
       }
-    }
 
-    if (tabs.length > 0) {
-      const formId = formKey.toLowerCase();
-      formsById[formId] = {
-        id: formId,
-        name: formNode['jcr:title'] || formNode.title || formKey,
-        tabs
-      };
-
-      // Folder assignments may be stored as an array of DAM paths on the form node
-      const assignedFolders = formNode.folderPaths || formNode.assignedFolders || [];
-      if (Array.isArray(assignedFolders)) {
-        for (const folderPath of assignedFolders) {
-          if (typeof folderPath === 'string' && folderPath.startsWith('/content/dam')) {
-            folderAssignments[folderPath.replace(/\/+$/, '')] = formId;
-          }
-        }
-      }
+      parseAssetsViewFormJson(formKey, formNode, formsById, folderAssignments);
     }
   }
 

@@ -7,11 +7,11 @@
 
 const ALLOWED_HOST_PATTERN = /^https:\/\/[a-z0-9-]+\.(adobeaemcloud\.com|adobecqms\.net)$/i;
 
+// Assets View folder-to-form properties ONLY (never Admin View's /conf/.../metadataschema)
 const FOLDER_SCHEMA_PROPS = [
   'assetsViewMetadataForm',
   'metadataForm',
-  'metadataSchema',
-  'dam:metadataSchema'
+  'dam:metadataForm'
 ];
 
 function errorResponse(statusCode, message, details = null) {
@@ -62,10 +62,12 @@ function validateSchemaPath(schemaPath) {
     return null;
   }
   const trimmed = schemaPath.trim().replace(/\/+$/, '');
-  const allowedPrefix =
-    trimmed.startsWith('/content/dam/appdata/metadataforms/') ||
-    trimmed.startsWith('/conf/global/settings/dam/adminui-extension/metadataschema/');
-  if (!allowedPrefix || trimmed.includes('..') || /[?#]/.test(trimmed)) {
+  // Assets View metadata forms live strictly under /content/dam/appdata/metadataforms
+  if (
+    !trimmed.startsWith('/content/dam/appdata/metadataforms/') ||
+    trimmed.includes('..') ||
+    /[?#]/.test(trimmed)
+  ) {
     return null;
   }
   return trimmed;
@@ -456,22 +458,40 @@ async function handlePatchMetadataBatch(aemHost, params) {
   };
 }
 
-async function handleGetMetadataForms(aemHost, params) {
-  const source = params.source === 'admin' ? 'admin' : 'assetsview';
-  const formPath =
-    source === 'admin'
-      ? '/conf/global/settings/dam/adminui-extension/metadataschema.infinity.json'
-      : '/content/dam/appdata/metadataforms.infinity.json';
+/**
+ * Recursively finds nt:file / JSON file paths inside `/content/dam/appdata/metadataforms`.
+ */
+function collectMetadataFormFilePaths(node, basePath, out = []) {
+  if (!node || typeof node !== 'object' || out.length >= 60) return out;
 
-  const url = `${aemHost}${formPath}`;
+  for (const [key, child] of Object.entries(node)) {
+    if (key.startsWith('jcr:') || key.startsWith('sling:') || !child || typeof child !== 'object') {
+      continue;
+    }
+    const childPath = `${basePath}/${key}`;
+    const primaryType = child['jcr:primaryType'];
+    if (primaryType === 'nt:file' || primaryType === 'dam:Asset' || key.endsWith('.json')) {
+      out.push({ key, path: childPath, primaryType });
+    } else {
+      collectMetadataFormFilePaths(child, childPath, out);
+    }
+  }
+  return out;
+}
+
+async function handleGetMetadataForms(aemHost, params) {
+  // Strictly Assets View metadata forms under /content/dam/appdata/metadataforms
+  const rootPath = '/content/dam/appdata/metadataforms';
+  const headers = buildHeaders(params);
+  const url = `${aemHost}${rootPath}.infinity.json`;
   const resp = await fetchWithTimeout(
     url,
     {
       method: 'GET',
-      headers: buildHeaders(params),
+      headers,
       redirect: 'manual'
     },
-    6000
+    8000
   );
 
   if (resp.status === 404 || resp.status === 403 || (resp.status >= 300 && resp.status < 400)) {
@@ -481,22 +501,56 @@ async function handleGetMetadataForms(aemHost, params) {
       body: {
         available: false,
         status: resp.status,
-        source,
-        formsTree: null
+        source: 'assetsview',
+        formsTree: null,
+        formFiles: []
       }
     };
   }
 
   const text = await resp.text();
-  let body;
+  let formsTree;
   try {
-    body = text ? JSON.parse(text) : null;
+    formsTree = text ? JSON.parse(text) : null;
   } catch {
-    body = null;
+    formsTree = null;
   }
 
   if (!resp.ok) {
-    return errorResponse(resp.status, 'Failed to fetch metadata forms from AEM', body);
+    return errorResponse(resp.status, 'Failed to fetch Assets View metadata forms from AEM', formsTree);
+  }
+
+  // If Assets View stores form definitions or folder mappings as JSON files (nt:file / dam:Asset),
+  // fetch their JSON contents in parallel.
+  const fileEntries = collectMetadataFormFilePaths(formsTree, rootPath);
+  const formFiles = [];
+
+  if (fileEntries.length > 0) {
+    await runWithConcurrency(fileEntries, 5, async (entry) => {
+      const fetchPath =
+        entry.primaryType === 'dam:Asset'
+          ? `${entry.path}/jcr:content/renditions/original`
+          : entry.path;
+      try {
+        const fResp = await fetchWithTimeout(
+          `${aemHost}${encodeJcrPath(fetchPath)}`,
+          { method: 'GET', headers, redirect: 'manual' },
+          6000
+        );
+        if (fResp.ok) {
+          const content = await fResp.json().catch(() => null);
+          if (content && typeof content === 'object') {
+            formFiles.push({
+              key: entry.key,
+              path: entry.path,
+              content
+            });
+          }
+        }
+      } catch {
+        // Ignore unreadable file
+      }
+    });
   }
 
   return {
@@ -504,8 +558,9 @@ async function handleGetMetadataForms(aemHost, params) {
     headers: { 'Content-Type': 'application/json' },
     body: {
       available: true,
-      source,
-      formsTree: body
+      source: 'assetsview',
+      formsTree,
+      formFiles
     }
   };
 }

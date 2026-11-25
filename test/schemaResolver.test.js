@@ -133,4 +133,63 @@ describe('schemaResolver', () => {
       })
     ]);
   });
+
+  test('parseAemSchemaTree parses Assets View JSON formFiles with accordions and folder mappings', () => {
+    const formFiles = [
+      {
+        key: 'citi-marketing.json',
+        path: '/content/dam/appdata/metadataforms/assets/citi-marketing.json',
+        content: {
+          title: 'Citi Marketing Form',
+          assignedFolders: ['/content/dam/citibank'],
+          tabs: [
+            {
+              id: 'basic',
+              title: 'Basic',
+              items: [
+                {
+                  type: 'accordion',
+                  title: 'Campaign',
+                  items: [
+                    {
+                      type: 'dropdown',
+                      label: 'Region',
+                      mapToProperty: 'drm:region',
+                      choices: [
+                        { label: 'North America', value: 'na' },
+                        { label: 'EMEA', value: 'emea' }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ];
+
+    const parsed = parseAemSchemaTree({}, formFiles);
+    const registry = createSchemaRegistry(parsed);
+    const asset = {
+      id: 'urn:aaid:aem:citi1',
+      path: '/content/dam/citibank/campaign/hero.jpg',
+      mimeType: 'image/jpeg'
+    };
+
+    const form = resolveEffectiveFormForAsset(asset, registry);
+    expect(form.id).toBe('citi-marketing');
+    expect(form.name).toBe('Citi Marketing Form');
+    expect(form.tabs[0].fields).toEqual([
+      expect.objectContaining({
+        property: 'drm:region',
+        label: 'Region',
+        type: 'select',
+        options: [
+          { label: 'North America', value: 'na' },
+          { label: 'EMEA', value: 'emea' }
+        ]
+      })
+    ]);
+  });
 });

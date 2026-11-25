@@ -375,14 +375,13 @@ async function fetchFolderSchemas(resources, authContext) {
             const ref =
               jcr?.assetsViewMetadataForm ||
               jcr?.metadataForm ||
-              jcr?.metadataSchema ||
-              jcr?.['dam:metadataSchema'];
+              jcr?.['dam:metadataForm'];
             if (typeof ref === 'string' && ref.trim()) {
               result = {
                 found: true,
                 assignedAt: candidate,
                 schemaRef: ref.trim(),
-                formId: ref.trim().split('/').filter(Boolean).pop().toLowerCase(),
+                formId: ref.trim().split('/').filter(Boolean).pop().replace(/\.json$/i, '').toLowerCase(),
                 formNode: null
               };
               break;
@@ -411,8 +410,9 @@ async function fetchFolderSchemas(resources, authContext) {
 }
 
 /**
- * Loads custom metadata forms from AEM Author (folder `jcr:content` assignments +
- * Assets View metadata forms + Admin View metadata schemas) and merges with defaults.
+ * Loads Assets View Metadata Forms ONLY (`/content/dam/appdata/metadataforms` +
+ * Assets View folder-level form assignments) and merges with built-in defaults.
+ * Never loads Admin View `/conf/global/settings/dam/adminui-extension/metadataschema`.
  */
 export async function fetchSchemaRegistry(authContext, resources = []) {
   const { aemHost, accessToken, apiKey } = authContext;
@@ -421,12 +421,12 @@ export async function fetchSchemaRegistry(authContext, resources = []) {
   const mergedFormsById = {};
   const mergedFolderAssignments = {};
 
-  // 1. Check folder-level metadata schema assignments on ancestor jcr:content nodes
+  // 1. Check Assets View folder-level metadata form assignments on ancestor jcr:content nodes
   const folderResult = await fetchFolderSchemas(resources, authContext);
   Object.assign(mergedFormsById, folderResult.formsById);
   Object.assign(mergedFolderAssignments, folderResult.folderAssignments);
 
-  // If every selected folder resolved its exact schema directly, skip downloading the full forms tree
+  // If every selected folder resolved its exact Assets View form directly, skip full tree
   if (folderResult.allResolved) {
     return createSchemaRegistry({
       formsById: mergedFormsById,
@@ -434,53 +434,53 @@ export async function fetchSchemaRegistry(authContext, resources = []) {
     });
   }
 
-  // 2. Load organization metadata forms tree (Assets View first, then Admin View)
-  for (const source of ['assetsview', 'admin']) {
-    try {
-      let formsTree = null;
-      if (proxyUrl) {
-        const res = await callProxy(
-          proxyUrl,
-          {
-            operation: 'getMetadataForms',
-            aemHost: normalizeHost(aemHost),
-            source,
-            apiKey
-          },
-          authContext
-        );
-        if (res.available && res.formsTree) {
-          formsTree = res.formsTree;
-        }
-      } else {
-        const path =
-          source === 'admin'
-            ? '/conf/global/settings/dam/adminui-extension/metadataschema.infinity.json'
-            : '/content/dam/appdata/metadataforms.infinity.json';
-        const resp = await fetch(`${normalizeHost(aemHost)}${path}`, {
+  // 2. Load Assets View metadata forms under /content/dam/appdata/metadataforms
+  try {
+    let formsTree = null;
+    let formFiles = [];
+
+    if (proxyUrl) {
+      const res = await callProxy(
+        proxyUrl,
+        {
+          operation: 'getMetadataForms',
+          aemHost: normalizeHost(aemHost),
+          source: 'assetsview',
+          apiKey
+        },
+        authContext
+      );
+      if (res.available) {
+        formsTree = res.formsTree || null;
+        formFiles = Array.isArray(res.formFiles) ? res.formFiles : [];
+      }
+    } else {
+      const resp = await fetch(
+        `${normalizeHost(aemHost)}/content/dam/appdata/metadataforms.infinity.json`,
+        {
           method: 'GET',
           headers: {
             Accept: 'application/json',
             Authorization: `Bearer ${accessToken}`
           }
-        });
-        if (resp.ok) {
-          formsTree = await resp.json();
         }
+      );
+      if (resp.ok) {
+        formsTree = await resp.json();
       }
-
-      if (formsTree) {
-        const parsed = parseAemSchemaTree(formsTree);
-        Object.assign(mergedFormsById, parsed.formsById);
-        // Folder jcr:content assignments take precedence over form-node folderPaths
-        Object.assign(mergedFolderAssignments, parsed.folderAssignments, folderResult.folderAssignments);
-        if (Object.keys(parsed.formsById).length > 0) {
-          break;
-        }
-      }
-    } catch {
-      // Fall through to next source or built-in defaults
     }
+
+    if (formsTree) {
+      const parsed = parseAemSchemaTree(formsTree, formFiles);
+      Object.assign(mergedFormsById, parsed.formsById);
+      Object.assign(
+        mergedFolderAssignments,
+        parsed.folderAssignments,
+        folderResult.folderAssignments
+      );
+    }
+  } catch {
+    // Fall back to built-in Assets View defaults
   }
 
   return createSchemaRegistry({
