@@ -3,6 +3,8 @@ dist/
 .parcel-cache/
 .env
 .aio
+.DS_Store
+.aws.tmp.creds.json
 *-Stage.json
 *-Production.json
 497CrimsonHyena-*.json
