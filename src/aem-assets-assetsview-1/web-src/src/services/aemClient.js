@@ -586,8 +586,10 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
   }
 
   if (proxyUrl && toPatch.length > 1) {
-    const assetById = new Map(toPatch.map(({ asset }) => [asset.id, asset]));
-    const chunks = chunkArray(toPatch, BATCH_CHUNK_SIZE);
+    const entryById = new Map(toPatch.map((entry) => [entry.asset.id, entry]));
+    // Chunks of 3 run in 1 parallel wave inside Runtime (always well under CloudFront's 30s 504 cutoff)
+    const chunks = chunkArray(toPatch, 3);
+    const retryQueue = [];
 
     for (const chunk of chunks) {
       try {
@@ -607,9 +609,13 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
         );
 
         for (const item of res.items || []) {
-          const asset = assetById.get(item.assetId) || { id: item.assetId, name: item.assetId };
+          const entry = entryById.get(item.assetId);
+          const asset = entry?.asset || { id: item.assetId, name: item.assetId };
           if (item.ok) {
             succeeded.push({ id: asset.id, name: asset.name, path: asset.path });
+            completed += 1;
+          } else if (entry && (!item.status || item.status >= 500 || item.status === 429)) {
+            retryQueue.push(entry);
           } else {
             failed.push({
               id: asset.id,
@@ -618,11 +624,38 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
               status: item.status,
               message: item.error || `PATCH failed (${item.status})`
             });
+            completed += 1;
           }
-          completed += 1;
         }
-      } catch (err) {
-        for (const { asset } of chunk) {
+        if (onProgress) {
+          onProgress(completed, assets.length);
+        }
+      } catch {
+        // Batch hit gateway timeout (504/502): queue chunk for gentle sequential per-asset retry
+        for (const entry of chunk) {
+          retryQueue.push(entry);
+        }
+      }
+    }
+
+    if (retryQueue.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      for (const { asset, patch } of retryQueue) {
+        try {
+          await callProxy(
+            proxyUrl,
+            {
+              operation: 'patchMetadata',
+              aemHost: normalizeHost(aemHost),
+              assetId: asset.id,
+              etag: asset.etag,
+              patch,
+              apiKey
+            },
+            authContext
+          );
+          succeeded.push({ id: asset.id, name: asset.name, path: asset.path });
+        } catch (err) {
           failed.push({
             id: asset.id,
             name: asset.name,
@@ -630,12 +663,12 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
             status: err.status,
             message: err.message
           });
+        } finally {
           completed += 1;
+          if (onProgress) {
+            onProgress(completed, assets.length);
+          }
         }
-      }
-
-      if (onProgress) {
-        onProgress(completed, assets.length);
       }
     }
 

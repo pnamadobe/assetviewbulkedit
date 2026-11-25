@@ -330,7 +330,7 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
           headers: buildHeaders(params, extraHeaders),
           body: JSON.stringify(currentPatch)
         },
-        12000
+        9000
       );
 
       const text = await resp.text();
