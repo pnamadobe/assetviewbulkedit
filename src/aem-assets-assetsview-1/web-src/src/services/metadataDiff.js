@@ -137,7 +137,7 @@ export function buildJsonPatchForAsset(assetMetadata = {}, dirtyEdits = {}, fiel
     const field = fieldsByProperty[prop];
     if (!field || field.readOnly) continue;
 
-    const pointer = `/assetMetadata/${escapeJsonPointer(prop)}`;
+    const pointer = `/${escapeJsonPointer(prop)}`;
     const hasExisting =
       Object.prototype.hasOwnProperty.call(assetMetadata, prop) &&
       assetMetadata[prop] !== undefined &&

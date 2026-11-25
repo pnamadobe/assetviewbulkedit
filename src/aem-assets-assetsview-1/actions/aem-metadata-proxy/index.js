@@ -316,6 +316,7 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
     'If-Match': etag || '*'
   };
 
+  let currentPatch = patch;
   let lastStatus = 504;
   let lastBody = null;
   let lastError = null;
@@ -327,7 +328,7 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
         {
           method: 'PATCH',
           headers: buildHeaders(params, extraHeaders),
-          body: JSON.stringify(patch)
+          body: JSON.stringify(currentPatch)
         },
         12000
       );
@@ -352,6 +353,23 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
 
       lastStatus = resp.status;
       lastBody = body;
+
+      // Auto-adapt JSON Patch path prefix (/prop <-> /assetMetadata/prop) across AEMaaCS versions
+      const detailText = String(body?.detail || body?.title || body?.message || '');
+      if (
+        resp.status === 400 &&
+        attempt === 0 &&
+        detailText.includes('does not exist for the operation')
+      ) {
+        const hasPrefix = currentPatch.some((op) => String(op.path || '').startsWith('/assetMetadata/'));
+        currentPatch = currentPatch.map((op) => ({
+          ...op,
+          path: hasPrefix
+            ? String(op.path).replace(/^\/assetMetadata/, '')
+            : `/assetMetadata${op.path}`
+        }));
+        continue;
+      }
 
       // If 412 Precondition Failed with a stale ETag, retry once with "*"
       if (resp.status === 412 && extraHeaders['If-Match'] !== '*' && attempt === 0) {
