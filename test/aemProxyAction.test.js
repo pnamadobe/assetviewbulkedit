@@ -2,7 +2,8 @@ const {
   main,
   validateAemHost,
   validateAssetId,
-  validateDamPath
+  validateDamPath,
+  flattenTagTree
 } = require('../src/aem-assets-assetsview-1/actions/aem-metadata-proxy/index');
 
 describe('aem-metadata-proxy action', () => {
@@ -30,6 +31,33 @@ describe('aem-metadata-proxy action', () => {
     expect(validateDamPath('/content/dam/../etc/passwd')).toBeNull();
     expect(validateDamPath('/etc/passwd')).toBeNull();
     expect(validateDamPath('')).toBeNull();
+  });
+
+  test('flattenTagTree extracts namespace:path tag IDs and display paths', () => {
+    const tree = {
+      'jcr:primaryType': 'sling:Folder',
+      brand: {
+        'jcr:primaryType': 'cq:Tag',
+        'jcr:title': 'Brand',
+        campaigns: {
+          'jcr:primaryType': 'cq:Tag',
+          'jcr:title': 'Campaigns',
+          spring: {
+            'jcr:primaryType': 'cq:Tag',
+            'jcr:title': 'Spring 2026'
+          }
+        }
+      }
+    };
+
+    expect(flattenTagTree(tree)).toEqual([
+      { id: 'brand:campaigns', title: 'Campaigns', displayPath: 'Brand / Campaigns' },
+      {
+        id: 'brand:campaigns/spring',
+        title: 'Spring 2026',
+        displayPath: 'Brand / Campaigns / Spring 2026'
+      }
+    ]);
   });
 
   test('main rejects requests without Authorization header', async () => {

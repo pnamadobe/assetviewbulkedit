@@ -67,6 +67,7 @@ function getCommonFolder(assets) {
 export default function BulkMetadataEditor({
   assets,
   thumbnailsById = {},
+  availableTags = [],
   schemaRegistry,
   onSave,
   onCancel,
@@ -199,23 +200,25 @@ export default function BulkMetadataEditor({
             </Flex>
           </Flex>
 
-          <ButtonGroup>
-            {dirtyCount > 0 && (
-              <Button variant="secondary" isQuiet onPress={handleResetAll} isDisabled={saving}>
-                Reset
+          <div className="aem-s2-pill-buttons">
+            <ButtonGroup>
+              {dirtyCount > 0 && (
+                <Button variant="secondary" isQuiet onPress={handleResetAll} isDisabled={saving}>
+                  Reset
+                </Button>
+              )}
+              <Button variant="secondary" onPress={onCancel} isDisabled={saving}>
+                Cancel
               </Button>
-            )}
-            <Button variant="secondary" onPress={onCancel} isDisabled={saving}>
-              Cancel
-            </Button>
-            <Button
-              variant="accent"
-              onPress={handleSubmit}
-              isDisabled={dirtyCount === 0 || activeAssets.length === 0 || saving}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </ButtonGroup>
+              <Button
+                variant="accent"
+                onPress={handleSubmit}
+                isDisabled={dirtyCount === 0 || activeAssets.length === 0 || saving}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            </ButtonGroup>
+          </div>
         </Flex>
       </View>
 
@@ -408,6 +411,7 @@ export default function BulkMetadataEditor({
                                   field={field}
                                   initialState={initialStates[field.property]}
                                   edit={dirtyEdits[field.property]}
+                                  availableTags={availableTags}
                                   onChange={(nextEdit) =>
                                     handleFieldChange(field.property, nextEdit)
                                   }

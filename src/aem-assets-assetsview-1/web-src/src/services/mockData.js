@@ -40,6 +40,17 @@ export const MOCK_SCHEMA_REGISTRY = createSchemaRegistry({
   }
 });
 
+export const MOCK_TAGS = [
+  { id: 'brand:spring-2026', title: 'Spring 2026', displayPath: 'Brand / Spring 2026' },
+  { id: 'brand:evergreen', title: 'Evergreen', displayPath: 'Brand / Evergreen' },
+  { id: 'channel:web', title: 'Web', displayPath: 'Channel / Web' },
+  { id: 'channel:social', title: 'Social', displayPath: 'Channel / Social' },
+  { id: 'channel:video', title: 'Video', displayPath: 'Channel / Video' },
+  { id: 'channel:press', title: 'Press', displayPath: 'Channel / Press' },
+  { id: 'format:hero', title: 'Hero Banner', displayPath: 'Format / Hero Banner' },
+  { id: 'campaign:q2-refresh', title: 'Q2 Refresh', displayPath: 'Campaign / Q2 Refresh' }
+];
+
 export const MOCK_ASSETS = [
   {
     id: 'urn:aaid:aem:11111111-1111-4111-8111-111111111111',

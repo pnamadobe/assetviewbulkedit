@@ -496,6 +496,76 @@ async function handleGetThumbnail(aemHost, params) {
   };
 }
 
+/**
+ * Flattens an AEM `/content/cq:tags.infinity.json` tree into searchable tag entries.
+ */
+function flattenTagTree(rootNode, maxTags = 2000) {
+  const tags = [];
+  if (!rootNode || typeof rootNode !== 'object') return tags;
+
+  function walk(node, namespace, pathSegments, titleSegments) {
+    if (tags.length >= maxTags || !node || typeof node !== 'object') return;
+
+    for (const [key, child] of Object.entries(node)) {
+      if (tags.length >= maxTags) break;
+      if (key.startsWith('jcr:') || key.startsWith('sling:') || key.startsWith('rep:')) continue;
+      if (!child || typeof child !== 'object') continue;
+
+      const isTag = child['jcr:primaryType'] === 'cq:Tag';
+      const title = child['jcr:title'] || key;
+
+      if (!namespace) {
+        // Top-level namespace node (e.g., "brand", "properties", "we-retail")
+        if (isTag) {
+          walk(child, key, [], [title]);
+        }
+      } else if (isTag) {
+        const nextPath = [...pathSegments, key];
+        const nextTitles = [...titleSegments, title];
+        const id = `${namespace}:${nextPath.join('/')}`;
+        tags.push({
+          id,
+          title,
+          displayPath: nextTitles.join(' / ')
+        });
+        walk(child, namespace, nextPath, nextTitles);
+      }
+    }
+  }
+
+  walk(rootNode, null, [], []);
+  return tags;
+}
+
+async function handleGetTags(aemHost, params) {
+  const url = `${aemHost}/content/cq:tags.infinity.json`;
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: 'GET',
+      headers: buildHeaders(params),
+      redirect: 'manual'
+    },
+    6000
+  );
+
+  if (!resp.ok) {
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: { available: false, status: resp.status, tags: [] }
+    };
+  }
+
+  const tree = await resp.json().catch(() => null);
+  const tags = flattenTagTree(tree);
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: { available: true, tags }
+  };
+}
+
 async function main(params) {
   const authHeader = params.__ow_headers?.authorization || params.__ow_headers?.Authorization;
   if (!authHeader) {
@@ -526,10 +596,12 @@ async function main(params) {
         return await handleGetFolderSchema(aemHost, params);
       case 'getThumbnail':
         return await handleGetThumbnail(aemHost, params);
+      case 'getTags':
+        return await handleGetTags(aemHost, params);
       default:
         return errorResponse(
           400,
-          'Unsupported operation. Expected one of: getMetadata, getMetadataBatch, patchMetadata, patchMetadataBatch, getMetadataForms, getFolderSchema, getThumbnail'
+          'Unsupported operation. Expected one of: getMetadata, getMetadataBatch, patchMetadata, patchMetadataBatch, getMetadataForms, getFolderSchema, getThumbnail, getTags'
         );
     }
   } catch (err) {
@@ -543,3 +615,4 @@ exports.main = main;
 exports.validateAemHost = validateAemHost;
 exports.validateAssetId = validateAssetId;
 exports.validateDamPath = validateDamPath;
+exports.flattenTagTree = flattenTagTree;

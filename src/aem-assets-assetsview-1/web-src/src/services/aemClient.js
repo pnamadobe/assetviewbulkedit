@@ -460,6 +460,42 @@ export async function fetchAssetThumbnails(assets, authContext, onThumbnail) {
 }
 
 /**
+ * Lazily fetches AEM taxonomy tags (`/content/cq:tags`) for the searchable Tag Picker.
+ */
+export async function fetchAemTags(authContext) {
+  const { aemHost, accessToken, apiKey } = authContext;
+  const proxyUrl = getProxyUrl();
+
+  try {
+    if (proxyUrl) {
+      const res = await callProxy(
+        proxyUrl,
+        {
+          operation: 'getTags',
+          aemHost: normalizeHost(aemHost),
+          apiKey
+        },
+        authContext
+      );
+      return res?.available && Array.isArray(res.tags) ? res.tags : [];
+    }
+
+    const resp = await fetch(`${normalizeHost(aemHost)}/content/cq:tags.infinity.json`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    if (!resp.ok) return [];
+    // Direct mode fallback returns empty array if not flattened server-side
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Applies bulk metadata edits to all selected assets using RFC 6902 JSON Patch.
  * Batches up to 25 patches per proxy call when using the App Builder proxy.
  */

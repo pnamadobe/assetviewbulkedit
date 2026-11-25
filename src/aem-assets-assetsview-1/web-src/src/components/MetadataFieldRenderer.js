@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { parseDate } from '@internationalized/date';
 import {
   ActionButton,
   Checkbox,
+  ComboBox,
+  DatePicker,
   Flex,
   Item,
   Picker,
@@ -16,6 +19,17 @@ import {
 import Undo from '@spectrum-icons/workflow/Undo';
 
 const MIXED_PLACEHOLDER = '<Mixed Entries>';
+
+function safeParseDate(str) {
+  if (!str || typeof str !== 'string') return null;
+  const match = str.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!match) return null;
+  try {
+    return parseDate(match[1]);
+  } catch {
+    return null;
+  }
+}
 
 function FieldLabelRow({ field, initialState, isDirty, onReset }) {
   return (
@@ -73,7 +87,7 @@ function FieldLabelRow({ field, initialState, isDirty, onReset }) {
   );
 }
 
-function MultiValueField({ field, initialState, edit, onChange, onReset }) {
+function MultiValueField({ field, initialState, edit, onChange, onReset, availableTags = [] }) {
   const [draft, setDraft] = useState('');
   const isDirty = Boolean(edit);
   const mode = edit?.mode || 'append';
@@ -83,8 +97,16 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
   const commonValues = initialState?.commonValues || [];
   const partialValues = initialState?.partialValues || [];
 
-  const handleAdd = () => {
-    const trimmed = draft.trim();
+  const tagTitleById = useMemo(() => {
+    const map = new Map();
+    for (const t of availableTags) {
+      map.set(t.id, t.displayPath || t.title || t.id);
+    }
+    return map;
+  }, [availableTags]);
+
+  const addValue = (rawVal) => {
+    const trimmed = String(rawVal || '').trim();
     if (!trimmed) return;
     const nextValues = addedValues.includes(trimmed) ? addedValues : [...addedValues, trimmed];
     onChange({
@@ -129,6 +151,15 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
     });
   };
 
+  const formatChipLabel = (val) => {
+    if (field.type === 'tags' && tagTitleById.has(val)) {
+      return tagTitleById.get(val);
+    }
+    return val;
+  };
+
+  const useTagComboBox = field.type === 'tags' && availableTags.length > 0;
+
   return (
     <div>
       <FieldLabelRow
@@ -139,24 +170,53 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
       />
 
       <Flex gap="size-100" alignItems="center" marginBottom="size-100">
-        <TextField
-          aria-label={`Add ${field.label}`}
-          placeholder={
-            field.type === 'tags'
-              ? 'Add tag and press Enter'
-              : `Add ${field.label.toLowerCase()} and press Enter`
-          }
-          value={draft}
-          onChange={setDraft}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              handleAdd();
+        {useTagComboBox ? (
+          <ComboBox
+            aria-label={`Search ${field.label}`}
+            placeholder="Search AEM tags or type a tag ID…"
+            allowsCustomValue
+            inputValue={draft}
+            onInputChange={setDraft}
+            onSelectionChange={(key) => {
+              if (key) {
+                addValue(String(key));
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && draft.trim()) {
+                e.preventDefault();
+                addValue(draft);
+              }
+            }}
+            flex
+          >
+            {availableTags.map((tag) => (
+              <Item key={tag.id} textValue={`${tag.displayPath} ${tag.id}`}>
+                <Text>{tag.displayPath}</Text>
+                <Text slot="description">{tag.id}</Text>
+              </Item>
+            ))}
+          </ComboBox>
+        ) : (
+          <TextField
+            aria-label={`Add ${field.label}`}
+            placeholder={
+              field.type === 'tags'
+                ? 'Add tag and press Enter'
+                : `Add ${field.label.toLowerCase()} and press Enter`
             }
-          }}
-          flex
-        />
-        <ActionButton onPress={handleAdd} isDisabled={!draft.trim()}>
+            value={draft}
+            onChange={setDraft}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addValue(draft);
+              }
+            }}
+            flex
+          />
+        )}
+        <ActionButton onPress={() => addValue(draft)} isDisabled={!draft.trim()}>
           Add
         </ActionButton>
       </Flex>
@@ -181,8 +241,9 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
                 <span
                   key={`common-${val}`}
                   className={`aem-spectrum-chip ${isRemoved ? 'aem-spectrum-chip--removed' : ''}`}
+                  title={val}
                 >
-                  <span>{val}</span>
+                  <span>{formatChipLabel(val)}</span>
                   <button
                     type="button"
                     className="aem-spectrum-chip-btn"
@@ -204,9 +265,9 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
                   className={`aem-spectrum-chip ${
                     isRemoved ? 'aem-spectrum-chip--removed' : 'aem-spectrum-chip--partial'
                   }`}
-                  title="Present on some (not all) checked assets"
+                  title={`${val} — present on some (not all) checked assets`}
                 >
-                  <span>{val}</span>
+                  <span>{formatChipLabel(val)}</span>
                   <button
                     type="button"
                     className="aem-spectrum-chip-btn"
@@ -220,10 +281,14 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
             })}
 
           {addedValues.map((val) => (
-            <span key={`added-${val}`} className="aem-spectrum-chip aem-spectrum-chip--added">
+            <span
+              key={`added-${val}`}
+              className="aem-spectrum-chip aem-spectrum-chip--added"
+              title={val}
+            >
               <span>
                 {mode === 'append' ? '+ ' : ''}
-                {val}
+                {formatChipLabel(val)}
               </span>
               <button
                 type="button"
@@ -246,7 +311,8 @@ export default function MetadataFieldRenderer({
   initialState,
   edit,
   onChange,
-  onReset
+  onReset,
+  availableTags = []
 }) {
   const isDirty = Boolean(edit);
 
@@ -259,6 +325,7 @@ export default function MetadataFieldRenderer({
           edit={edit}
           onChange={onChange}
           onReset={onReset}
+          availableTags={availableTags}
         />
       </div>
     );
@@ -339,6 +406,7 @@ export default function MetadataFieldRenderer({
   }
 
   if (field.type === 'date') {
+    const parsedDate = safeParseDate(String(currentValue ?? ''));
     return (
       <div className={wrapperClass}>
         <FieldLabelRow
@@ -347,18 +415,12 @@ export default function MetadataFieldRenderer({
           isDirty={isDirty}
           onReset={onReset}
         />
-        <Flex alignItems="center" gap="size-100">
-          <input
-            type="date"
-            aria-label={field.label}
-            className="aem-spectrum-date-input"
-            value={String(currentValue ?? '')}
-            onChange={(e) => onChange({ value: e.target.value })}
-          />
-          {!isDirty && initialState?.isMixed && (
-            <Text UNSAFE_style={{ fontSize: 12, opacity: 0.65 }}>{MIXED_PLACEHOLDER}</Text>
-          )}
-        </Flex>
+        <DatePicker
+          aria-label={field.label}
+          width="100%"
+          value={parsedDate}
+          onChange={(dateVal) => onChange({ value: dateVal ? dateVal.toString() : '' })}
+        />
       </div>
     );
   }

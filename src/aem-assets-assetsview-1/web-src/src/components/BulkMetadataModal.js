@@ -15,6 +15,7 @@ import {
 } from '@adobe/react-spectrum';
 import { extensionId } from './Constants';
 import {
+  fetchAemTags,
   fetchAllAssetsMetadata,
   fetchAssetThumbnails,
   fetchSchemaRegistry,
@@ -33,6 +34,7 @@ export default function BulkMetadataModal() {
 
   const [assets, setAssets] = useState([]);
   const [thumbnailsById, setThumbnailsById] = useState({});
+  const [availableTags, setAvailableTags] = useState([]);
   const [schemaRegistry, setSchemaRegistry] = useState(null);
 
   const [saving, setSaving] = useState(false);
@@ -92,10 +94,15 @@ export default function BulkMetadataModal() {
           setAssets(metadataResult.assets);
           setSchemaRegistry(registry);
 
-          // Lazily load small thumbnails in the background without blocking editor open
+          // Lazily load small thumbnails & AEM tag taxonomy in the background
           fetchAssetThumbnails(metadataResult.assets, auth, (assetId, dataUrl) => {
             if (active) {
               setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
+            }
+          });
+          fetchAemTags(auth).then((tags) => {
+            if (active && tags.length > 0) {
+              setAvailableTags(tags);
             }
           });
         }
@@ -201,6 +208,7 @@ export default function BulkMetadataModal() {
         <BulkMetadataEditor
           assets={assets}
           thumbnailsById={thumbnailsById}
+          availableTags={availableTags}
           schemaRegistry={schemaRegistry}
           onSave={handleSave}
           onCancel={closeDialog}

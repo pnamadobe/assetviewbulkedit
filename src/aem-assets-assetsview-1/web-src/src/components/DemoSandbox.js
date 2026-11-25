@@ -13,7 +13,7 @@ import {
   View,
   defaultTheme
 } from '@adobe/react-spectrum';
-import { MOCK_ASSETS, MOCK_SCHEMA_REGISTRY } from '../services/mockData';
+import { MOCK_ASSETS, MOCK_SCHEMA_REGISTRY, MOCK_TAGS } from '../services/mockData';
 import { buildJsonPatchForAsset } from '../services/metadataDiff';
 import BulkMetadataEditor from './BulkMetadataEditor';
 
@@ -129,6 +129,7 @@ export default function DemoSandbox() {
             <BulkMetadataEditor
               key={selectedIds.join(',')}
               assets={selectedAssets}
+              availableTags={MOCK_TAGS}
               schemaRegistry={MOCK_SCHEMA_REGISTRY}
               onSave={handleSave}
               onCancel={() => setEditorOpen(false)}
