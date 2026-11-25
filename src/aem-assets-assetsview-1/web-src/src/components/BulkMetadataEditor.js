@@ -66,6 +66,7 @@ function getCommonFolder(assets) {
 
 export default function BulkMetadataEditor({
   assets,
+  metadataProgress = null,
   loadErrors = [],
   retryingLoad = false,
   onRetryLoad = null,
@@ -110,10 +111,11 @@ export default function BulkMetadataEditor({
     return intersectCommonFields(activeForms);
   }, [activeAssets, schemaRegistry]);
 
-  const initialStates = useMemo(
-    () => computeCommonFieldStates(fields, activeAssets),
-    [fields, activeAssets]
-  );
+  const initialStates = useMemo(() => {
+    const loadedActive = activeAssets.filter((a) => a.metadataLoaded !== false);
+    if (loadedActive.length === 0) return {};
+    return computeCommonFieldStates(fields, loadedActive);
+  }, [fields, activeAssets]);
 
   const fieldsByProperty = useMemo(() => {
     const map = {};
@@ -168,6 +170,9 @@ export default function BulkMetadataEditor({
       ? distinctForms[0].name
       : distinctForms.length > 1
       ? `${distinctForms.length} forms · ${fields.length} common fields`
+      : null,
+    metadataProgress
+      ? `Loading existing values (${metadataProgress.completed}/${metadataProgress.total})…`
       : null,
     dirtyCount > 0 ? `${dirtyCount} ${dirtyCount === 1 ? 'change' : 'changes'}` : null
   ].filter(Boolean);

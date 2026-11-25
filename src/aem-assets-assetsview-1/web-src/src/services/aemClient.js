@@ -160,10 +160,15 @@ export async function fetchAssetMetadata(resource, authContext) {
 
 /**
  * Fetches metadata for all selected assets.
- * When using the App Builder proxy, batches up to 25 assets into a single HTTP request
- * (`getMetadataBatch`) so Runtime fetches them in parallel over Adobe's internal network.
+ * Calls `onBatchLoaded(batchAssets)` incrementally as each chunk resolves so the UI
+ * can populate existing values progressively without blocking modal open.
  */
-export async function fetchAllAssetsMetadata(resources, authContext, onProgress) {
+export async function fetchAllAssetsMetadata(
+  resources,
+  authContext,
+  onProgress,
+  onBatchLoaded
+) {
   const proxyUrl = getProxyUrl();
   let completed = 0;
   const loaded = [];
@@ -188,13 +193,19 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
         );
 
         if (searchRes?.available && Array.isArray(searchRes.items)) {
+          const batchLoaded = [];
           for (const item of searchRes.items) {
             if (item.ok && item.assetId && !loadedIds.has(item.assetId)) {
               const resource = resourceById.get(item.assetId) || { id: item.assetId };
-              loaded.push(normalizeLoadedAsset(resource, item.data, item.etag));
+              const normalized = normalizeLoadedAsset(resource, item.data, item.etag);
+              loaded.push(normalized);
+              batchLoaded.push(normalized);
               loadedIds.add(item.assetId);
               completed += 1;
             }
+          }
+          if (batchLoaded.length > 0 && onBatchLoaded) {
+            onBatchLoaded(batchLoaded);
           }
           if (onProgress) {
             onProgress(completed, resources.length);
@@ -223,14 +234,20 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
           authContext
         );
 
+        const batchLoaded = [];
         for (const item of res.items || []) {
           const resource = resourceById.get(item.assetId) || { id: item.assetId };
           if (item.ok) {
-            loaded.push(normalizeLoadedAsset(resource, item.data, item.etag));
+            const normalized = normalizeLoadedAsset(resource, item.data, item.etag);
+            loaded.push(normalized);
+            batchLoaded.push(normalized);
             completed += 1;
           } else {
             failedResources.push(resource);
           }
+        }
+        if (batchLoaded.length > 0 && onBatchLoaded) {
+          onBatchLoaded(batchLoaded);
         }
         if (onProgress) {
           onProgress(completed, resources.length);
@@ -250,6 +267,7 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
         try {
           const asset = await fetchAssetMetadata(resource, authContext);
           loaded.push(asset);
+          if (onBatchLoaded) onBatchLoaded([asset]);
         } catch (err) {
           errors.push({
             id: resource.id,
@@ -277,6 +295,7 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
     try {
       const asset = await fetchAssetMetadata(resource, authContext);
       loaded.push(asset);
+      if (onBatchLoaded) onBatchLoaded([asset]);
     } catch (err) {
       errors.push({
         id: resource.id,

@@ -6,7 +6,6 @@ import {
   Flex,
   Heading,
   InlineAlert,
-  ProgressBar,
   ProgressCircle,
   Provider,
   Text,
@@ -23,16 +22,60 @@ import {
 } from '../services/aemClient';
 import BulkMetadataEditor from './BulkMetadataEditor';
 
+const EXT_TO_MIME = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  svg: 'image/svg+xml',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  heic: 'image/heic',
+  avif: 'image/avif',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+  avi: 'video/x-msvideo',
+  pdf: 'application/pdf',
+  ai: 'application/postscript',
+  eps: 'application/postscript',
+  psd: 'image/vnd.adobe.photoshop',
+  indd: 'application/x-indesign'
+};
+
+function inferMimeFromName(name) {
+  const ext = String(name || '').split('.').pop()?.toLowerCase();
+  return (ext && EXT_TO_MIME[ext]) || '';
+}
+
+function buildInitialAssetStubs(resources) {
+  return resources.map((r) => {
+    const name = r.path ? r.path.split('/').pop() : r.id;
+    return {
+      id: r.id,
+      path: r.path || '',
+      name,
+      mimeType: r.mimeType || inferMimeFromName(name),
+      etag: null,
+      assetMetadata: {},
+      repositoryMetadata: {},
+      metadataLoaded: false
+    };
+  });
+}
+
 export default function BulkMetadataModal() {
   const [guestConnection, setGuestConnection] = useState(null);
   const [colorScheme, setColorScheme] = useState('light');
   const [authContext, setAuthContext] = useState(null);
 
   const [loading, setLoading] = useState(true);
-  const [loadProgress, setLoadProgress] = useState({ completed: 0, total: 0 });
   const [loadError, setLoadError] = useState(null);
 
   const [assets, setAssets] = useState([]);
+  const [metadataProgress, setMetadataProgress] = useState(null);
   const [loadErrors, setLoadErrors] = useState([]);
   const [retryingLoad, setRetryingLoad] = useState(false);
   const [thumbnailsById, setThumbnailsById] = useState({});
@@ -78,43 +121,53 @@ export default function BulkMetadataModal() {
           return;
         }
 
-        setLoadProgress({ completed: 0, total: resources.length });
+        const initialStubs = buildInitialAssetStubs(resources);
 
-        const [metadataResult, registry] = await Promise.all([
-          fetchAllAssetsMetadata(resources, auth, (completed, total) => {
-            if (active) setLoadProgress({ completed, total });
-          }),
-          fetchSchemaRegistry(auth, resources)
-        ]);
-
+        // 1. Resolve only the metadata form/schema first (~300ms) so the modal opens immediately
+        const registry = await fetchSchemaRegistry(auth, resources);
         if (!active) return;
 
-        if (metadataResult.assets.length === 0) {
-          const firstErr = metadataResult.errors[0]?.message || 'Unable to read asset metadata.';
-          setLoadError(firstErr);
-        } else {
-          setAssets(metadataResult.assets);
-          setLoadErrors(metadataResult.errors || []);
-          setSchemaRegistry(registry);
+        setAssets(initialStubs);
+        setSchemaRegistry(registry);
+        setMetadataProgress({ completed: 0, total: resources.length });
+        setLoading(false);
 
-          // Lazily load small thumbnails & AEM tag taxonomy in the background
-          fetchAssetThumbnails(metadataResult.assets, auth, (assetId, dataUrl) => {
+        // 2. Stream existing asset metadata in the background without blocking editing
+        fetchAllAssetsMetadata(
+          resources,
+          auth,
+          (completed, total) => {
             if (active) {
-              setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
+              setMetadataProgress(completed < total ? { completed, total } : null);
             }
-          });
-          fetchAemTags(auth).then((tags) => {
-            if (active && tags.length > 0) {
-              setAvailableTags(tags);
-            }
-          });
-        }
+          },
+          (batchAssets) => {
+            if (!active || !batchAssets?.length) return;
+            const byId = new Map(batchAssets.map((a) => [a.id, { ...a, metadataLoaded: true }]));
+            setAssets((prev) => prev.map((item) => byId.get(item.id) || item));
+          }
+        ).then((metadataResult) => {
+          if (!active) return;
+          setMetadataProgress(null);
+          setLoadErrors(metadataResult.errors || []);
+        });
+
+        // 3. Lazily load thumbnails & AEM tag taxonomy in the background
+        fetchAssetThumbnails(initialStubs, auth, (assetId, dataUrl) => {
+          if (active) {
+            setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
+          }
+        });
+        fetchAemTags(auth).then((tags) => {
+          if (active && tags.length > 0) {
+            setAvailableTags(tags);
+          }
+        });
       } catch (err) {
         if (active) {
           setLoadError(err.message || 'Failed to initialize Bulk Metadata Editor.');
+          setLoading(false);
         }
-      } finally {
-        if (active) setLoading(false);
       }
     })();
 
@@ -130,7 +183,6 @@ export default function BulkMetadataModal() {
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && !e.defaultPrevented && !saving) {
-        // Ignore if a Spectrum popover/tray/calendar is currently open
         if (document.querySelector('[role="dialog"], [role="listbox"]')) {
           return;
         }
@@ -149,10 +201,10 @@ export default function BulkMetadataModal() {
       const retryResources = loadErrors.map((e) => ({ id: e.id, path: e.path }));
       const retryRes = await fetchAllAssetsMetadata(retryResources, authContext);
       if (retryRes.assets.length > 0) {
-        setAssets((prev) => [...prev, ...retryRes.assets]);
-        fetchAssetThumbnails(retryRes.assets, authContext, (assetId, dataUrl) => {
-          setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
-        });
+        const byId = new Map(
+          retryRes.assets.map((a) => [a.id, { ...a, metadataLoaded: true }])
+        );
+        setAssets((prev) => prev.map((item) => byId.get(item.id) || item));
       }
       setLoadErrors(retryRes.errors || []);
     } finally {
@@ -214,19 +266,8 @@ export default function BulkMetadataModal() {
           gap="size-200"
           padding="size-300"
         >
-          <ProgressCircle aria-label="Loading asset metadata" isIndeterminate size="L" />
-          <Text>
-            Loading metadata &amp; resolving common schemas ({loadProgress.completed}/
-            {loadProgress.total})…
-          </Text>
-          {loadProgress.total > 0 && (
-            <ProgressBar
-              aria-label="Metadata load progress"
-              value={loadProgress.completed}
-              maxValue={loadProgress.total}
-              width="size-3600"
-            />
-          )}
+          <ProgressCircle aria-label="Loading metadata form" isIndeterminate size="L" />
+          <Text>Loading metadata form…</Text>
         </Flex>
       ) : loadError ? (
         <View padding="size-400" maxWidth="size-6000" marginX="auto">
@@ -243,6 +284,7 @@ export default function BulkMetadataModal() {
       ) : (
         <BulkMetadataEditor
           assets={assets}
+          metadataProgress={metadataProgress}
           loadErrors={loadErrors}
           retryingLoad={retryingLoad}
           onRetryLoad={handleRetryFailedLoad}
