@@ -1,12 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActionButton,
-  Badge,
   Button,
   ButtonGroup,
   Checkbox,
   Content,
-  Divider,
   Flex,
   Heading,
   InlineAlert,
@@ -25,7 +23,6 @@ import DocumentIcon from '@spectrum-icons/workflow/Document';
 import FilmIcon from '@spectrum-icons/workflow/Filmroll';
 import FolderIcon from '@spectrum-icons/workflow/Folder';
 import ImageIcon from '@spectrum-icons/workflow/Image';
-import PropertiesIcon from '@spectrum-icons/workflow/Properties';
 import RailLeftIcon from '@spectrum-icons/workflow/RailLeft';
 import {
   intersectCommonFields,
@@ -45,26 +42,9 @@ function AssetThumbnail({ asset, thumbnailUrl }) {
     : AssetIcon;
 
   return (
-    <div
-      style={{
-        width: 40,
-        height: 40,
-        minWidth: 40,
-        borderRadius: 4,
-        overflow: 'hidden',
-        border: '1px solid var(--spectrum-global-color-gray-300)',
-        backgroundColor: 'var(--spectrum-global-color-gray-100)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
+    <div className="aem-asset-thumb">
       {thumbnailUrl ? (
-        <img
-          src={thumbnailUrl}
-          alt={asset.name}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-        />
+        <img src={thumbnailUrl} alt={asset.name} />
       ) : (
         <FallbackIcon size="S" />
       )}
@@ -108,15 +88,12 @@ export default function BulkMetadataEditor({
 
   const commonFolder = useMemo(() => getCommonFolder(activeAssets), [activeAssets]);
 
-  const { tabs, fields, omittedFields, distinctForms, resolvedByAssetId } = useMemo(() => {
-    const map = {};
-    for (const asset of assets) {
-      map[asset.id] = resolveEffectiveFormForAsset(asset, schemaRegistry);
-    }
-    const activeForms = activeAssets.map((a) => map[a.id]);
-    const intersection = intersectCommonFields(activeForms);
-    return { ...intersection, resolvedByAssetId: map };
-  }, [assets, activeAssets, schemaRegistry]);
+  const { tabs, fields, omittedFields, distinctForms } = useMemo(() => {
+    const activeForms = activeAssets.map((a) =>
+      resolveEffectiveFormForAsset(a, schemaRegistry)
+    );
+    return intersectCommonFields(activeForms);
+  }, [activeAssets, schemaRegistry]);
 
   const initialStates = useMemo(
     () => computeCommonFieldStates(fields, activeAssets),
@@ -146,11 +123,7 @@ export default function BulkMetadataEditor({
   };
 
   const toggleAll = (checked) => {
-    if (checked) {
-      setCheckedIds(new Set(assets.map((a) => a.id)));
-    } else {
-      setCheckedIds(new Set());
-    }
+    setCheckedIds(checked ? new Set(assets.map((a) => a.id)) : new Set());
   };
 
   const handleFieldChange = (property, nextEdit) => {
@@ -174,26 +147,36 @@ export default function BulkMetadataEditor({
     onSave(activeAssets, dirtyEdits, fieldsByProperty);
   };
 
+  const subtitleParts = [
+    `${activeAssets.length} of ${assets.length} selected`,
+    distinctForms.length === 1
+      ? distinctForms[0].name
+      : distinctForms.length > 1
+      ? `${distinctForms.length} forms · ${fields.length} common fields`
+      : null,
+    dirtyCount > 0 ? `${dirtyCount} ${dirtyCount === 1 ? 'change' : 'changes'}` : null
+  ].filter(Boolean);
+
   return (
     <Flex
       direction="column"
       height="100%"
       UNSAFE_style={{ backgroundColor: 'var(--spectrum-global-color-gray-50)' }}
     >
-      {/* AEM Assets View Top Action Bar */}
+      {/* Clean AEM Assets View Header */}
       <View
         paddingX="size-300"
         paddingY="size-150"
         backgroundColor="gray-50"
         borderBottomWidth="thin"
-        borderColor="gray-300"
+        borderColor="gray-200"
       >
-        <Flex alignItems="center" justifyContent="space-between" gap="size-150" wrap>
-          <Flex alignItems="center" gap="size-150">
+        <Flex alignItems="center" justifyContent="space-between" gap="size-200">
+          <Flex alignItems="center" gap="size-150" minWidth={0}>
             <TooltipTrigger delay={300}>
               <ActionButton
                 isQuiet
-                aria-label={railOpen ? 'Hide selected assets rail' : 'Show selected assets rail'}
+                aria-label={railOpen ? 'Hide selected assets' : 'Show selected assets'}
                 onPress={() => setRailOpen((v) => !v)}
               >
                 <RailLeftIcon size="S" />
@@ -201,34 +184,25 @@ export default function BulkMetadataEditor({
               <Tooltip>{railOpen ? 'Hide selected assets' : 'Show selected assets'}</Tooltip>
             </TooltipTrigger>
 
-            <Divider orientation="vertical" size="S" />
-
-            <PropertiesIcon size="S" />
-            <Heading level={4} margin={0}>
-              Edit Metadata
-            </Heading>
-
-            <Badge variant="neutral">
-              {activeAssets.length} of {assets.length} selected
-            </Badge>
-            {distinctForms.length > 0 && (
-              <Badge variant="info">
-                {distinctForms.length === 1
-                  ? distinctForms[0].name
-                  : `${distinctForms.length} forms · ${fields.length} common fields`}
-              </Badge>
-            )}
-            {dirtyCount > 0 && (
-              <Badge variant="positive">
-                {dirtyCount} {dirtyCount === 1 ? 'change' : 'changes'}
-              </Badge>
-            )}
+            <Flex direction="column" minWidth={0}>
+              <Heading level={4} margin={0} UNSAFE_style={{ fontSize: 16, fontWeight: 700 }}>
+                Edit Metadata
+              </Heading>
+              <Text
+                UNSAFE_style={{
+                  fontSize: 12,
+                  color: 'var(--spectrum-global-color-gray-600)'
+                }}
+              >
+                {subtitleParts.join(' · ')}
+              </Text>
+            </Flex>
           </Flex>
 
           <ButtonGroup>
             {dirtyCount > 0 && (
-              <Button variant="secondary" style="outline" onPress={handleResetAll} isDisabled={saving}>
-                Reset All
+              <Button variant="secondary" isQuiet onPress={handleResetAll} isDisabled={saving}>
+                Reset
               </Button>
             )}
             <Button variant="secondary" onPress={onCancel} isDisabled={saving}>
@@ -239,93 +213,87 @@ export default function BulkMetadataEditor({
               onPress={handleSubmit}
               isDisabled={dirtyCount === 0 || activeAssets.length === 0 || saving}
             >
-              {saving ? 'Saving…' : `Save (${activeAssets.length})`}
+              {saving ? 'Saving…' : 'Save'}
             </Button>
           </ButtonGroup>
         </Flex>
       </View>
 
-      {/* Main Two-Pane AEM Assets View Body */}
+      {/* Main Two-Pane AEM Layout */}
       <Flex flex minHeight={0}>
-        {/* Left Selected Assets Rail: Checkboxes + Thumbnails + Filenames */}
+        {/* Left Asset List Rail — borderless rows, checkboxes, small thumbnails, filenames */}
         {railOpen && (
           <View
             width="size-3600"
             backgroundColor="gray-75"
             borderEndWidth="thin"
-            borderColor="gray-300"
+            borderColor="gray-200"
             overflow="auto"
-            padding="size-200"
+            paddingX="size-150"
+            paddingY="size-200"
           >
-            <Flex direction="column" gap="size-125">
-              <Flex alignItems="center" justifyContent="space-between">
+            <Flex direction="column" gap="size-100">
+              <View paddingX="size-125" paddingBottom="size-50">
                 <Checkbox
                   isSelected={allChecked}
                   isIndeterminate={someChecked}
                   onChange={toggleAll}
                   isDisabled={saving}
                 >
-                  <Text UNSAFE_style={{ fontSize: 13, fontWeight: 600 }}>
-                    Assets ({activeAssets.length}/{assets.length})
+                  <Text UNSAFE_style={{ fontSize: 12, fontWeight: 600 }}>
+                    Select all ({activeAssets.length}/{assets.length})
                   </Text>
                 </Checkbox>
-              </Flex>
 
-              {commonFolder && (
-                <Flex
-                  alignItems="center"
-                  gap="size-75"
-                  UNSAFE_style={{
-                    fontSize: 11,
-                    color: 'var(--spectrum-global-color-gray-700)',
-                    wordBreak: 'break-all'
-                  }}
-                >
-                  <FolderIcon size="XS" />
-                  <Text>{commonFolder.replace(/^\/content\/dam\/?/, '/')}</Text>
-                </Flex>
-              )}
+                {commonFolder && (
+                  <Flex
+                    alignItems="center"
+                    gap="size-75"
+                    marginTop="size-50"
+                    UNSAFE_style={{
+                      fontSize: 11,
+                      color: 'var(--spectrum-global-color-gray-600)',
+                      wordBreak: 'break-all'
+                    }}
+                  >
+                    <FolderIcon size="XS" />
+                    <Text>{commonFolder.replace(/^\/content\/dam\/?/, '/')}</Text>
+                  </Flex>
+                )}
+              </View>
 
-              <Divider size="S" />
-
-              <Flex direction="column" gap="size-75">
+              <Flex direction="column" gap="size-25">
                 {assets.map((asset) => {
                   const isChecked = checkedIds.has(asset.id);
                   return (
-                    <View
+                    <div
                       key={asset.id}
-                      paddingX="size-100"
-                      paddingY="size-75"
-                      backgroundColor={isChecked ? 'gray-50' : 'gray-100'}
-                      borderWidth="thin"
-                      borderColor={isChecked ? 'blue-400' : 'gray-200'}
-                      borderRadius="regular"
-                      UNSAFE_style={{ opacity: isChecked ? 1 : 0.6 }}
+                      className={`aem-asset-row ${isChecked ? '' : 'aem-asset-row--unchecked'}`}
                     >
-                      <Flex alignItems="center" gap="size-100">
-                        <Checkbox
-                          aria-label={`Select ${asset.name}`}
-                          isSelected={isChecked}
-                          onChange={() => toggleAsset(asset.id)}
-                          isDisabled={saving}
-                          UNSAFE_style={{ marginRight: 0 }}
-                        />
-                        <AssetThumbnail
-                          asset={asset}
-                          thumbnailUrl={thumbnailsById[asset.id] || asset.thumbnailUrl}
-                        />
-                        <Flex direction="column" minWidth={0} flex>
-                          <Text
-                            UNSAFE_style={{
-                              fontSize: 13,
-                              fontWeight: 500,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap'
-                            }}
-                          >
-                            {asset.name}
-                          </Text>
+                      <Checkbox
+                        aria-label={`Select ${asset.name}`}
+                        isSelected={isChecked}
+                        onChange={() => toggleAsset(asset.id)}
+                        isDisabled={saving}
+                        UNSAFE_style={{ marginRight: 0 }}
+                      />
+                      <AssetThumbnail
+                        asset={asset}
+                        thumbnailUrl={thumbnailsById[asset.id] || asset.thumbnailUrl}
+                      />
+                      <Flex direction="column" minWidth={0} flex>
+                        <Text
+                          UNSAFE_style={{
+                            fontSize: 13,
+                            fontWeight: 500,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {asset.name}
+                        </Text>
+                        {asset.mimeType && (
                           <Text
                             UNSAFE_style={{
                               fontSize: 11,
@@ -335,12 +303,11 @@ export default function BulkMetadataEditor({
                               whiteSpace: 'nowrap'
                             }}
                           >
-                            {asset.mimeType || 'Asset'} ·{' '}
-                            {resolvedByAssetId[asset.id]?.name || 'Default'}
+                            {asset.mimeType}
                           </Text>
-                        </Flex>
+                        )}
                       </Flex>
-                    </View>
+                    </div>
                   );
                 })}
               </Flex>
@@ -348,9 +315,9 @@ export default function BulkMetadataEditor({
           </View>
         )}
 
-        {/* Right Tabbed Metadata Form / Schema Panel */}
-        <View flex overflow="auto" padding="size-300" backgroundColor="gray-50">
-          <Flex direction="column" gap="size-250" maxWidth="960px" marginX="auto">
+        {/* Right Tabbed Metadata Form Canvas */}
+        <View flex overflow="auto" paddingX="size-400" paddingY="size-300" backgroundColor="gray-50">
+          <Flex direction="column" gap="size-250" maxWidth="920px">
             {saving && saveProgress && (
               <ProgressBar
                 label={`Saving metadata (${saveProgress.completed} of ${saveProgress.total})…`}
@@ -377,41 +344,39 @@ export default function BulkMetadataEditor({
             )}
 
             {activeAssets.length === 0 ? (
-              <InlineAlert variant="notice" width="100%">
-                <Heading>No assets selected</Heading>
-                <Content>
-                  Check one or more assets in the left panel to edit their common metadata fields.
-                </Content>
-              </InlineAlert>
+              <Text
+                UNSAFE_style={{
+                  fontSize: 14,
+                  color: 'var(--spectrum-global-color-gray-600)',
+                  paddingTop: 16
+                }}
+              >
+                Select one or more assets on the left to edit their common metadata fields.
+              </Text>
             ) : (
               <>
                 {omittedFields.length > 0 && (
-                  <InlineAlert variant="info" width="100%">
-                    <Heading>
-                      Showing {fields.length} metadata fields common to all {activeAssets.length}{' '}
-                      checked assets
-                    </Heading>
-                    <Content>
-                      {omittedFields.length} type- or folder-specific{' '}
-                      {omittedFields.length === 1 ? 'field is' : 'fields are'} hidden because the
-                      selection spans {distinctForms.length} metadata forms (
-                      {omittedFields
-                        .slice(0, 6)
-                        .map((f) => f.label)
-                        .join(', ')}
-                      {omittedFields.length > 6 ? `, +${omittedFields.length - 6} more` : ''}).
-                    </Content>
-                  </InlineAlert>
+                  <Text
+                    UNSAFE_style={{
+                      fontSize: 12,
+                      color: 'var(--spectrum-global-color-gray-600)'
+                    }}
+                  >
+                    Showing {fields.length} common fields across {distinctForms.length} metadata
+                    forms ({omittedFields.length} type-specific{' '}
+                    {omittedFields.length === 1 ? 'field' : 'fields'} hidden).
+                  </Text>
                 )}
 
                 {tabs.length === 0 ? (
-                  <InlineAlert variant="notice" width="100%">
-                    <Heading>No common editable metadata fields</Heading>
-                    <Content>
-                      The checked assets do not share any editable metadata fields across their
-                      assigned metadata forms.
-                    </Content>
-                  </InlineAlert>
+                  <Text
+                    UNSAFE_style={{
+                      fontSize: 14,
+                      color: 'var(--spectrum-global-color-gray-600)'
+                    }}
+                  >
+                    The selected assets do not share any editable metadata fields.
+                  </Text>
                 ) : (
                   <Tabs
                     key={tabs.map((t) => t.id).join('|')}
@@ -435,7 +400,7 @@ export default function BulkMetadataEditor({
                     <TabPanels>
                       {tabs.map((tab) => (
                         <Item key={tab.id}>
-                          <View paddingTop="size-250">
+                          <View paddingTop="size-300">
                             <div className="aem-bulk-field-grid">
                               {tab.fields.map((field) => (
                                 <MetadataFieldRenderer

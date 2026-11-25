@@ -7,13 +7,11 @@ import {
   Picker,
   Radio,
   RadioGroup,
-  StatusLight,
   Text,
   TextArea,
   TextField,
   Tooltip,
-  TooltipTrigger,
-  View
+  TooltipTrigger
 } from '@adobe/react-spectrum';
 import Undo from '@spectrum-icons/workflow/Undo';
 
@@ -21,8 +19,8 @@ const MIXED_PLACEHOLDER = '<Mixed Entries>';
 
 function FieldLabelRow({ field, initialState, isDirty, onReset }) {
   return (
-    <Flex alignItems="center" justifyContent="space-between" marginBottom="size-50" minHeight="size-300">
-      <Flex alignItems="center" gap="size-100" wrap>
+    <Flex alignItems="center" justifyContent="space-between" marginBottom="size-65" minHeight="size-250">
+      <Flex alignItems="center" gap="size-100">
         <Text
           UNSAFE_style={{
             fontSize: 12,
@@ -37,19 +35,24 @@ function FieldLabelRow({ field, initialState, isDirty, onReset }) {
         </Text>
 
         {isDirty ? (
-          <StatusLight
-            variant="info"
-            UNSAFE_style={{ paddingBlock: 0, minHeight: 'auto', fontSize: 11 }}
+          <Text
+            UNSAFE_style={{
+              fontSize: 11,
+              fontWeight: 500,
+              color: 'var(--spectrum-global-color-blue-600, #1473e6)'
+            }}
           >
             Modified
-          </StatusLight>
+          </Text>
         ) : initialState?.isMixed ? (
-          <StatusLight
-            variant="neutral"
-            UNSAFE_style={{ paddingBlock: 0, minHeight: 'auto', fontSize: 11 }}
+          <Text
+            UNSAFE_style={{
+              fontSize: 11,
+              color: 'var(--spectrum-global-color-gray-600, #6e6e6e)'
+            }}
           >
             Mixed
-          </StatusLight>
+          </Text>
         ) : null}
       </Flex>
 
@@ -59,12 +62,11 @@ function FieldLabelRow({ field, initialState, isDirty, onReset }) {
             isQuiet
             aria-label={`Reset ${field.label}`}
             onPress={onReset}
-            UNSAFE_style={{ height: 24, minWidth: 24 }}
+            UNSAFE_style={{ height: 22, minWidth: 22 }}
           >
             <Undo size="XS" />
-            <Text UNSAFE_style={{ fontSize: 12 }}>Reset</Text>
           </ActionButton>
-          <Tooltip>Discard changes to {field.label}</Tooltip>
+          <Tooltip>Reset {field.label}</Tooltip>
         </TooltipTrigger>
       )}
     </Flex>
@@ -128,13 +130,7 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
   };
 
   return (
-    <View
-      padding="size-200"
-      backgroundColor="gray-50"
-      borderWidth="thin"
-      borderColor={isDirty ? 'blue-500' : 'gray-300'}
-      borderRadius="regular"
-    >
+    <div>
       <FieldLabelRow
         field={field}
         initialState={initialState}
@@ -142,24 +138,13 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
         onReset={onReset}
       />
 
-      <RadioGroup
-        aria-label={`${field.label} update mode`}
-        orientation="horizontal"
-        value={mode}
-        onChange={handleModeChange}
-        marginBottom="size-100"
-      >
-        <Radio value="append">Append / Remove (preserve existing values)</Radio>
-        <Radio value="replace">Replace all values</Radio>
-      </RadioGroup>
-
-      <Flex gap="size-100" alignItems="end" marginBottom="size-125">
+      <Flex gap="size-100" alignItems="center" marginBottom="size-100">
         <TextField
           aria-label={`Add ${field.label}`}
           placeholder={
             field.type === 'tags'
-              ? 'Enter tag (e.g. brand:spring-2026) and press Enter'
-              : `Enter ${field.label.toLowerCase()} and press Enter`
+              ? 'Add tag and press Enter'
+              : `Add ${field.label.toLowerCase()} and press Enter`
           }
           value={draft}
           onChange={setDraft}
@@ -176,76 +161,83 @@ function MultiValueField({ field, initialState, edit, onChange, onReset }) {
         </ActionButton>
       </Flex>
 
-      <Flex wrap gap="size-75">
-        {mode === 'append' &&
-          commonValues.map((val) => {
-            const isRemoved = removedValues.includes(val);
-            return (
-              <span
-                key={`common-${val}`}
-                className={`aem-spectrum-chip ${isRemoved ? 'aem-spectrum-chip--removed' : ''}`}
-              >
-                <span>{val}</span>
-                <button
-                  type="button"
-                  className="aem-spectrum-chip-btn"
-                  onClick={() => toggleRemoveExisting(val)}
-                  title={isRemoved ? 'Undo remove' : 'Remove from all selected assets'}
-                >
-                  {isRemoved ? '↺' : '×'}
-                </button>
-              </span>
-            );
-          })}
+      <RadioGroup
+        aria-label={`${field.label} update mode`}
+        orientation="horizontal"
+        value={mode}
+        onChange={handleModeChange}
+        marginBottom="size-100"
+      >
+        <Radio value="append">Append to existing</Radio>
+        <Radio value="replace">Replace all</Radio>
+      </RadioGroup>
 
-        {mode === 'append' &&
-          partialValues.map((val) => {
-            const isRemoved = removedValues.includes(val);
-            return (
-              <span
-                key={`partial-${val}`}
-                className={`aem-spectrum-chip ${
-                  isRemoved ? 'aem-spectrum-chip--removed' : 'aem-spectrum-chip--partial'
-                }`}
-                title="Present on some (not all) selected assets"
-              >
-                <span>{val}</span>
-                <button
-                  type="button"
-                  className="aem-spectrum-chip-btn"
-                  onClick={() => toggleRemoveExisting(val)}
-                  title={isRemoved ? 'Undo remove' : 'Remove from assets that have this value'}
+      {(commonValues.length > 0 || partialValues.length > 0 || addedValues.length > 0) && (
+        <Flex wrap gap="size-75" marginTop="size-50">
+          {mode === 'append' &&
+            commonValues.map((val) => {
+              const isRemoved = removedValues.includes(val);
+              return (
+                <span
+                  key={`common-${val}`}
+                  className={`aem-spectrum-chip ${isRemoved ? 'aem-spectrum-chip--removed' : ''}`}
                 >
-                  {isRemoved ? '↺' : '×'}
-                </button>
-              </span>
-            );
-          })}
+                  <span>{val}</span>
+                  <button
+                    type="button"
+                    className="aem-spectrum-chip-btn"
+                    onClick={() => toggleRemoveExisting(val)}
+                    title={isRemoved ? 'Undo remove' : 'Remove from all checked assets'}
+                  >
+                    {isRemoved ? '↺' : '×'}
+                  </button>
+                </span>
+              );
+            })}
 
-        {addedValues.map((val) => (
-          <span key={`added-${val}`} className="aem-spectrum-chip aem-spectrum-chip--added">
-            <span>
-              {mode === 'append' ? '+ ' : ''}
-              {val}
+          {mode === 'append' &&
+            partialValues.map((val) => {
+              const isRemoved = removedValues.includes(val);
+              return (
+                <span
+                  key={`partial-${val}`}
+                  className={`aem-spectrum-chip ${
+                    isRemoved ? 'aem-spectrum-chip--removed' : 'aem-spectrum-chip--partial'
+                  }`}
+                  title="Present on some (not all) checked assets"
+                >
+                  <span>{val}</span>
+                  <button
+                    type="button"
+                    className="aem-spectrum-chip-btn"
+                    onClick={() => toggleRemoveExisting(val)}
+                    title={isRemoved ? 'Undo remove' : 'Remove from assets that have this value'}
+                  >
+                    {isRemoved ? '↺' : '×'}
+                  </button>
+                </span>
+              );
+            })}
+
+          {addedValues.map((val) => (
+            <span key={`added-${val}`} className="aem-spectrum-chip aem-spectrum-chip--added">
+              <span>
+                {mode === 'append' ? '+ ' : ''}
+                {val}
+              </span>
+              <button
+                type="button"
+                className="aem-spectrum-chip-btn"
+                onClick={() => removeAdded(val)}
+                title="Remove"
+              >
+                ×
+              </button>
             </span>
-            <button
-              type="button"
-              className="aem-spectrum-chip-btn"
-              onClick={() => removeAdded(val)}
-              title="Remove"
-            >
-              ×
-            </button>
-          </span>
-        ))}
-
-        {commonValues.length === 0 && partialValues.length === 0 && addedValues.length === 0 && (
-          <Text UNSAFE_style={{ fontSize: 12, opacity: 0.65 }}>
-            No {field.label.toLowerCase()} applied yet.
-          </Text>
-        )}
-      </Flex>
-    </View>
+          ))}
+        </Flex>
+      )}
+    </div>
   );
 }
 
@@ -279,9 +271,7 @@ export default function MetadataFieldRenderer({
     : initialState?.sharedValue ?? '';
 
   const placeholder = !isDirty && initialState?.isMixed ? MIXED_PLACEHOLDER : '';
-  const isWide = field.type === 'textarea';
-
-  const wrapperClass = isWide ? 'aem-bulk-field-wide' : undefined;
+  const wrapperClass = field.type === 'textarea' ? 'aem-bulk-field-wide' : undefined;
 
   if (field.type === 'boolean') {
     const isIndeterminate = !isDirty && Boolean(initialState?.isMixed);
@@ -366,7 +356,7 @@ export default function MetadataFieldRenderer({
             onChange={(e) => onChange({ value: e.target.value })}
           />
           {!isDirty && initialState?.isMixed && (
-            <Text UNSAFE_style={{ fontSize: 12, opacity: 0.7 }}>{MIXED_PLACEHOLDER}</Text>
+            <Text UNSAFE_style={{ fontSize: 12, opacity: 0.65 }}>{MIXED_PLACEHOLDER}</Text>
           )}
         </Flex>
       </div>

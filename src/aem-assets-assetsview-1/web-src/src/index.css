@@ -13,13 +13,49 @@ body,
 
 .aem-bulk-field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 20px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px 28px;
   align-items: start;
 }
 
 .aem-bulk-field-wide {
   grid-column: 1 / -1;
+}
+
+.aem-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: background-color 120ms ease;
+}
+
+.aem-asset-row:hover {
+  background-color: var(--spectrum-global-color-gray-200, rgba(0, 0, 0, 0.04));
+}
+
+.aem-asset-row--unchecked {
+  opacity: 0.5;
+}
+
+.aem-asset-thumb {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 4px;
+  overflow: hidden;
+  background-color: var(--spectrum-global-color-gray-200, #eaeaea);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aem-asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .aem-spectrum-date-input {
@@ -50,33 +86,30 @@ body,
 .aem-spectrum-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   height: 24px;
   padding: 0 8px 0 10px;
-  border-radius: 4px;
+  border-radius: 12px;
   font-size: 12px;
   line-height: 1;
-  border: 1px solid var(--spectrum-global-color-gray-400, #b3b3b3);
-  background-color: var(--spectrum-global-color-gray-75, #f8f8f8);
+  border: none;
+  background-color: var(--spectrum-global-color-gray-200, #eaeaea);
   color: var(--spectrum-alias-text-color, #2c2c2c);
 }
 
 .aem-spectrum-chip--added {
-  border-color: var(--spectrum-global-color-blue-500, #1473e6);
   background-color: var(--spectrum-global-color-blue-100, #e5f0fe);
   color: var(--spectrum-global-color-blue-700, #0d66d0);
 }
 
 .aem-spectrum-chip--removed {
-  border-color: var(--spectrum-global-color-red-400, #e34850);
   background-color: var(--spectrum-global-color-red-100, #ffebe7);
   color: var(--spectrum-global-color-red-700, #c9252d);
   text-decoration: line-through;
 }
 
 .aem-spectrum-chip--partial {
-  border-style: dashed;
-  opacity: 0.85;
+  opacity: 0.72;
 }
 
 .aem-spectrum-chip-btn {
@@ -86,7 +119,7 @@ body,
   width: 16px;
   height: 16px;
   border: none;
-  border-radius: 2px;
+  border-radius: 50%;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -96,5 +129,5 @@ body,
 }
 
 .aem-spectrum-chip-btn:hover {
-  background-color: rgba(0, 0, 0, 0.08);
+  background-color: rgba(0, 0, 0, 0.1);
 }
