@@ -4,7 +4,8 @@ import { register } from '@adobe/uix-guest';
 import {
   extensionId,
   SUPPORTED_CONTEXTS,
-  OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT
+  OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT,
+  HIDE_BUILTIN_BULK_EDIT_IDS
 } from './Constants';
 
 /**
@@ -43,7 +44,7 @@ export default function ExtensionRegistration() {
                 {
                   id: 'bulk-edit-metadata',
                   icon: 'Edit',
-                  label: 'Bulk Edit Metadata',
+                  label: 'Bulk Edit All Metadata',
                   onClick: async () => {
                     guestConnection.host.modal.openDialog({
                       title: `Bulk Edit Metadata (${assets.length} assets)`,
@@ -59,14 +60,22 @@ export default function ExtensionRegistration() {
               ];
             },
 
-            async getHiddenBuiltInActions() {
+            async getHiddenBuiltInActions({ context, resourceSelection }) {
+              if (!SUPPORTED_CONTEXTS.has(context)) {
+                return [];
+              }
+              const assets = filterAssetResources(resourceSelection);
+              if (assets.length >= 2) {
+                return HIDE_BUILTIN_BULK_EDIT_IDS;
+              }
               return [];
             },
 
             async overrideBuiltInAction({ actionId, context, resourceSelection }) {
+              console.debug('[aem-assets-bulk-metadata] built-in action triggered:', actionId);
               if (
                 OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT &&
-                actionId === 'edit' &&
+                HIDE_BUILTIN_BULK_EDIT_IDS.includes(actionId) &&
                 SUPPORTED_CONTEXTS.has(context)
               ) {
                 const assets = filterAssetResources(resourceSelection);
