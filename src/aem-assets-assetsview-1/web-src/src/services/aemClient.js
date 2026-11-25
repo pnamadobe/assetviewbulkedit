@@ -43,13 +43,16 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-async function callProxy(proxyUrl, payload, { accessToken, apiKey }) {
+async function callProxy(proxyUrl, payload, { accessToken, apiKey, imsOrg }) {
   const headers = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${accessToken}`
   };
   if (apiKey) {
     headers['X-Api-Key'] = apiKey;
+  }
+  if (imsOrg) {
+    headers['x-gw-ims-org-id'] = imsOrg;
   }
 
   const resp = await fetch(proxyUrl, {

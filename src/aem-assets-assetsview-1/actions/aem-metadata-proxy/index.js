@@ -34,8 +34,9 @@ function validateAssetId(assetId) {
   if (!assetId || typeof assetId !== 'string') {
     return false;
   }
-  // AEM asset URNs look like urn:aaid:aem:<uuid>
-  return /^urn:aaid:aem:[0-9a-f-]+$/i.test(assetId.trim());
+  const trimmed = assetId.trim();
+  // AEM asset URNs (e.g. urn:aaid:aem:<uuid>); reject path traversal / query / fragment chars
+  return /^[a-z0-9:._-]+$/i.test(trimmed) && !trimmed.includes('..');
 }
 
 function buildHeaders(params, extraHeaders = {}) {

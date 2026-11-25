@@ -18,5 +18,5 @@ runtimeManifest:
           inputs:
             LOG_LEVEL: $LOG_LEVEL
           annotations:
-            require-adobe-auth: true
+            require-adobe-auth: false
             final: true
