@@ -163,7 +163,9 @@ function inferFieldType(node) {
   const prop = normalizePropertyName(node.name || node.mapToProperty || node.property || '');
   const label = String(node.fieldLabel || node.label || node['jcr:title'] || '').toLowerCase();
 
-  if (prop === 'cq:tags' || rt.includes('tag')) return { type: 'tags', multiValue: true };
+  if (prop === 'cq:tags' || prop === 'xcm:keywords' || rt.includes('tag')) {
+    return { type: 'tags', multiValue: true };
+  }
   if (
     STATUS_PROPERTIES.has(prop) ||
     TARGET_PROPERTIES.has(prop) ||
@@ -262,10 +264,19 @@ function parseAssetsViewFormJson(formKey, formObj, formsById, folderAssignments)
     return;
   }
 
+  // Unwrap jcr:content if present on an Assets View metadataform node
+  const effectiveObj =
+    formObj['jcr:content'] && typeof formObj['jcr:content'] === 'object' && !formObj.tabs && !formObj.items
+      ? { ...formObj, ...formObj['jcr:content'] }
+      : formObj;
+
   const tabs = [];
-  const rawTabs = Array.isArray(formObj.tabs)
-    ? formObj.tabs
-    : formObj.items?.tabs?.items || formObj.tabs?.items || formObj.tabs || formObj.items;
+  const rawTabs = Array.isArray(effectiveObj.tabs)
+    ? effectiveObj.tabs
+    : effectiveObj.items?.tabs?.items ||
+      effectiveObj.tabs?.items ||
+      effectiveObj.tabs ||
+      effectiveObj.items;
 
   if (Array.isArray(rawTabs)) {
     rawTabs.forEach((tabNode, idx) => {

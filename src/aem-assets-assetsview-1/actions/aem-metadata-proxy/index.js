@@ -566,8 +566,12 @@ async function handleGetMetadataForms(aemHost, params) {
 }
 
 /**
- * Checks all ancestor folders from `folderPath` up to `/content/dam` IN PARALLEL
- * for a folder-assigned metadata schema/form property, picking the deepest match.
+ * Resolves the Assets View folder-assigned metadata form (`dam:metadataForm`) via
+ * the official AEM OpenAPI:
+ *   1. GET /adobe/folders?path=<folderPath> -> folderId
+ *   2. GET /adobe/assets/<folderId>/metadata -> assetMetadata['dam:metadataForm'] + repo:ancestors
+ *   3. Check ancestor folder IDs in parallel (deepest first) for `dam:metadataForm`
+ *   4. Fetch the resolved `/content/dam/appdata/metadataforms/<name>` form definition
  */
 async function handleGetFolderSchema(aemHost, params) {
   const folderPath = validateDamPath(params.folderPath);
@@ -576,56 +580,162 @@ async function handleGetFolderSchema(aemHost, params) {
   }
 
   const headers = buildHeaders(params);
-  const parts = folderPath.split('/').filter(Boolean);
-  const candidates = [];
-  for (let len = parts.length; len >= 2; len -= 1) {
-    candidates.push('/' + parts.slice(0, len).join('/'));
-  }
+  let assignedAt = null;
+  let schemaRef = null;
 
-  const checks = await Promise.all(
-    candidates.map(async (candidate) => {
-      const url = `${aemHost}${encodeJcrPath(candidate)}/jcr:content.json`;
-      try {
-        const resp = await fetchWithTimeout(
-          url,
-          { method: 'GET', headers, redirect: 'manual' },
-          5000
+  try {
+    // Step 1: Resolve folderId via Folders API
+    const folderResp = await fetchWithTimeout(
+      `${aemHost}/adobe/folders?path=${encodeURIComponent(folderPath)}`,
+      { method: 'GET', headers },
+      8000
+    );
+
+    if (folderResp.ok) {
+      const folderJson = await folderResp.json().catch(() => null);
+      const folderId = folderJson?.self?.folderId;
+
+      if (folderId) {
+        // Step 2: Read leaf folder metadata (gives dam:metadataForm + repo:ancestors)
+        const leafMetaResp = await fetchWithTimeout(
+          `${aemHost}/adobe/assets/${encodeURIComponent(folderId)}/metadata`,
+          { method: 'GET', headers },
+          8000
         );
-        if (!resp.ok) return null;
-        const jcrContent = await resp.json().catch(() => null);
-        if (!jcrContent || typeof jcrContent !== 'object') return null;
 
-        for (const propName of FOLDER_SCHEMA_PROPS) {
-          const rawVal = jcrContent[propName];
-          if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
-            return { candidate, propName, schemaRef: rawVal.trim() };
+        if (leafMetaResp.ok) {
+          const leafMeta = await leafMetaResp.json().catch(() => null);
+          const leafForm =
+            leafMeta?.assetMetadata?.['dam:metadataForm'] ||
+            leafMeta?.assetMetadata?.assetsViewMetadataForm ||
+            leafMeta?.assetMetadata?.metadataForm;
+
+          if (typeof leafForm === 'string' && leafForm.trim()) {
+            assignedAt = leafMeta?.repositoryMetadata?.['repo:path'] || folderPath;
+            schemaRef = leafForm.trim();
+          } else {
+            // Step 3: Walk repo:ancestors (deepest first) in parallel
+            const ancestors = Array.isArray(leafMeta?.repositoryMetadata?.['repo:ancestors'])
+              ? [...leafMeta.repositoryMetadata['repo:ancestors']].reverse()
+              : [];
+
+            if (ancestors.length > 0) {
+              const ancestorResults = await Promise.all(
+                ancestors.map(async (ancId) => {
+                  try {
+                    const ancResp = await fetchWithTimeout(
+                      `${aemHost}/adobe/assets/${encodeURIComponent(ancId)}/metadata`,
+                      { method: 'GET', headers },
+                      6000
+                    );
+                    if (!ancResp.ok) return null;
+                    const ancMeta = await ancResp.json().catch(() => null);
+                    const ref =
+                      ancMeta?.assetMetadata?.['dam:metadataForm'] ||
+                      ancMeta?.assetMetadata?.assetsViewMetadataForm ||
+                      ancMeta?.assetMetadata?.metadataForm;
+                    if (typeof ref === 'string' && ref.trim()) {
+                      return {
+                        path: ancMeta?.repositoryMetadata?.['repo:path'] || folderPath,
+                        schemaRef: ref.trim()
+                      };
+                    }
+                  } catch {
+                    // Ignore ancestor error
+                  }
+                  return null;
+                })
+              );
+
+              const deepestMatch = ancestorResults.find(Boolean);
+              if (deepestMatch) {
+                assignedAt = deepestMatch.path;
+                schemaRef = deepestMatch.schemaRef;
+              }
+            }
           }
         }
-      } catch {
-        // Ignore individual ancestor read errors
       }
-      return null;
-    })
-  );
+    }
+  } catch {
+    // Fall through to JCR check if OpenAPI lookup fails
+  }
 
-  // Pick the deepest (first) matching ancestor
-  const match = checks.find(Boolean);
-  if (match) {
-    const formId = match.schemaRef.split('/').filter(Boolean).pop().toLowerCase();
-    let formNode = null;
-    const safeSchemaPath = validateSchemaPath(match.schemaRef);
-    if (safeSchemaPath) {
-      try {
-        const schemaResp = await fetchWithTimeout(
-          `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
-          { method: 'GET', headers, redirect: 'manual' },
-          6000
-        );
-        if (schemaResp.ok) {
-          formNode = await schemaResp.json().catch(() => null);
+  // Fallback: check jcr:content/metadata.json on ancestors if OpenAPI didn't find one
+  if (!schemaRef) {
+    const parts = folderPath.split('/').filter(Boolean);
+    const candidates = [];
+    for (let len = parts.length; len >= 2; len -= 1) {
+      candidates.push('/' + parts.slice(0, len).join('/'));
+    }
+
+    const checks = await Promise.all(
+      candidates.map(async (candidate) => {
+        for (const suffix of ['/jcr:content/metadata.json', '/jcr:content.json']) {
+          const url = `${aemHost}${encodeJcrPath(candidate)}${suffix}`;
+          try {
+            const resp = await fetchWithTimeout(
+              url,
+              { method: 'GET', headers, redirect: 'manual' },
+              5000
+            );
+            if (!resp.ok) continue;
+            const jcr = await resp.json().catch(() => null);
+            if (!jcr || typeof jcr !== 'object') continue;
+            for (const propName of FOLDER_SCHEMA_PROPS) {
+              const rawVal = jcr[propName];
+              if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+                return { candidate, schemaRef: rawVal.trim() };
+              }
+            }
+          } catch {
+            // Continue
+          }
         }
-      } catch {
-        // Fall back to forms tree
+        return null;
+      })
+    );
+
+    const match = checks.find(Boolean);
+    if (match) {
+      assignedAt = match.candidate;
+      schemaRef = match.schemaRef;
+    }
+  }
+
+  if (schemaRef) {
+    const formId = schemaRef
+      .split('/')
+      .filter(Boolean)
+      .pop()
+      .replace(/\.json$/i, '')
+      .toLowerCase();
+
+    let formNode = null;
+    const safeSchemaPath = validateSchemaPath(schemaRef);
+    if (safeSchemaPath) {
+      const fetchCandidates = [
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}/jcr:content/renditions/original`,
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}`
+      ];
+      for (const candidateUrl of fetchCandidates) {
+        try {
+          const schemaResp = await fetchWithTimeout(
+            candidateUrl,
+            { method: 'GET', headers, redirect: 'manual' },
+            6000
+          );
+          if (schemaResp.ok) {
+            const parsed = await schemaResp.json().catch(() => null);
+            if (parsed && typeof parsed === 'object') {
+              formNode = parsed;
+              break;
+            }
+          }
+        } catch {
+          // Try next candidate URL
+        }
       }
     }
 
@@ -634,9 +744,8 @@ async function handleGetFolderSchema(aemHost, params) {
       headers: { 'Content-Type': 'application/json' },
       body: {
         found: true,
-        assignedAt: match.candidate,
-        property: match.propName,
-        schemaRef: match.schemaRef,
+        assignedAt,
+        schemaRef,
         formId,
         formNode
       }

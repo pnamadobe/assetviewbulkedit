@@ -9,7 +9,20 @@
 
 function toArray(value) {
   if (Array.isArray(value)) {
-    return value.map((v) => String(v)).filter((v) => v.length > 0);
+    return value
+      .map((v) => {
+        if (v && typeof v === 'object') {
+          // AEM Assets Author API returns xcm:keywords tags as { value, repo:ancestors: ['ns', 'a', 'b'] }
+          if (Array.isArray(v['repo:ancestors']) && v['repo:ancestors'].length > 0) {
+            const [ns, ...rest] = v['repo:ancestors'];
+            return rest.length > 0 ? `${ns}:${rest.join('/')}` : String(ns);
+          }
+          if (v.tagId) return String(v.tagId);
+          if (v.value) return String(v.value);
+        }
+        return String(v);
+      })
+      .filter((v) => v.length > 0);
   }
   if (typeof value === 'string' && value.trim().length > 0) {
     return [value.trim()];
