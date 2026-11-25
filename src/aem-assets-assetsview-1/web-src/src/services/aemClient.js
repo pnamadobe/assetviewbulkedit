@@ -9,8 +9,8 @@ import config from '../config.json';
 import { createSchemaRegistry, parseAemSchemaTree } from './schemaResolver';
 import { buildJsonPatchForAsset } from './metadataDiff';
 
-const DEFAULT_CONCURRENCY = 5;
-const BATCH_CHUNK_SIZE = 5;
+const DEFAULT_CONCURRENCY = 3;
+const BATCH_CHUNK_SIZE = 4;
 
 function chunkArray(items, size) {
   const chunks = [];
@@ -172,8 +172,10 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
   if (proxyUrl && resources.length > 1) {
     const resourceById = new Map(resources.map((r) => [r.id, r]));
     const chunks = chunkArray(resources, BATCH_CHUNK_SIZE);
+    const failedResources = [];
 
-    await mapWithConcurrency(chunks, 2, async (chunk) => {
+    // Run chunks sequentially (internal concurrency 3) to avoid AEM Author burst throttling
+    for (const chunk of chunks) {
       try {
         const res = await callProxy(
           proxyUrl,
@@ -190,41 +192,47 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
           const resource = resourceById.get(item.assetId) || { id: item.assetId };
           if (item.ok) {
             loaded.push(normalizeLoadedAsset(resource, item.data, item.etag));
+            completed += 1;
           } else {
-            errors.push({
-              id: resource.id,
-              path: resource.path,
-              message: item.error || `Failed (${item.status})`,
-              status: item.status
-            });
+            failedResources.push(resource);
           }
-          completed += 1;
         }
         if (onProgress) {
           onProgress(completed, resources.length);
         }
       } catch {
-        // Automatic fallback to per-asset calls if a batch hits a gateway timeout (504/502)
-        await mapWithConcurrency(chunk, 3, async (resource) => {
-          try {
-            const asset = await fetchAssetMetadata(resource, authContext);
-            loaded.push(asset);
-          } catch (err) {
-            errors.push({
-              id: resource.id,
-              path: resource.path,
-              message: err.message,
-              status: err.status
-            });
-          } finally {
-            completed += 1;
-            if (onProgress) {
-              onProgress(completed, resources.length);
-            }
-          }
-        });
+        // Queue the whole chunk for gentle individual retry
+        for (const resource of chunk) {
+          failedResources.push(resource);
+        }
       }
-    });
+    }
+
+    // Gentle retry pass for any transiently failed assets (concurrency 2)
+    if (failedResources.length > 0) {
+      await mapWithConcurrency(failedResources, 2, async (resource) => {
+        try {
+          const asset = await fetchAssetMetadata(resource, authContext);
+          loaded.push(asset);
+        } catch (err) {
+          errors.push({
+            id: resource.id,
+            path: resource.path,
+            message: err.message,
+            status: err.status
+          });
+        } finally {
+          completed += 1;
+          if (onProgress) {
+            onProgress(completed, resources.length);
+          }
+        }
+      });
+    }
+
+    // Preserve original selection order
+    const orderById = new Map(resources.map((r, idx) => [r.id, idx]));
+    loaded.sort((a, b) => (orderById.get(a.id) ?? 0) - (orderById.get(b.id) ?? 0));
 
     return { assets: loaded, errors };
   }

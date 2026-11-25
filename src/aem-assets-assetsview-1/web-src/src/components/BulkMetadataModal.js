@@ -33,6 +33,8 @@ export default function BulkMetadataModal() {
   const [loadError, setLoadError] = useState(null);
 
   const [assets, setAssets] = useState([]);
+  const [loadErrors, setLoadErrors] = useState([]);
+  const [retryingLoad, setRetryingLoad] = useState(false);
   const [thumbnailsById, setThumbnailsById] = useState({});
   const [availableTags, setAvailableTags] = useState([]);
   const [schemaRegistry, setSchemaRegistry] = useState(null);
@@ -92,6 +94,7 @@ export default function BulkMetadataModal() {
           setLoadError(firstErr);
         } else {
           setAssets(metadataResult.assets);
+          setLoadErrors(metadataResult.errors || []);
           setSchemaRegistry(registry);
 
           // Lazily load small thumbnails & AEM tag taxonomy in the background
@@ -122,6 +125,24 @@ export default function BulkMetadataModal() {
 
   const closeDialog = () => {
     guestConnection?.host?.modal?.closeDialog();
+  };
+
+  const handleRetryFailedLoad = async () => {
+    if (!authContext || loadErrors.length === 0 || retryingLoad) return;
+    setRetryingLoad(true);
+    try {
+      const retryResources = loadErrors.map((e) => ({ id: e.id, path: e.path }));
+      const retryRes = await fetchAllAssetsMetadata(retryResources, authContext);
+      if (retryRes.assets.length > 0) {
+        setAssets((prev) => [...prev, ...retryRes.assets]);
+        fetchAssetThumbnails(retryRes.assets, authContext, (assetId, dataUrl) => {
+          setThumbnailsById((prev) => ({ ...prev, [assetId]: dataUrl }));
+        });
+      }
+      setLoadErrors(retryRes.errors || []);
+    } finally {
+      setRetryingLoad(false);
+    }
   };
 
   const handleSave = async (activeAssets, dirtyEdits, fieldsByProperty) => {
@@ -207,6 +228,9 @@ export default function BulkMetadataModal() {
       ) : (
         <BulkMetadataEditor
           assets={assets}
+          loadErrors={loadErrors}
+          retryingLoad={retryingLoad}
+          onRetryLoad={handleRetryFailedLoad}
           thumbnailsById={thumbnailsById}
           availableTags={availableTags}
           schemaRegistry={schemaRegistry}

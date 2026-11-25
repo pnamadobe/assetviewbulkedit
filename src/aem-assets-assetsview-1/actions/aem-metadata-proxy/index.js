@@ -110,6 +110,12 @@ async function runWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -122,31 +128,54 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
 
 async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
-  const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 12000);
-  const text = await resp.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    body = { raw: text };
-  }
+  let lastError = null;
 
-  if (!resp.ok) {
-    return {
-      assetId,
-      ok: false,
-      status: resp.status,
-      error: `Failed to fetch metadata for ${assetId}`,
-      details: body
-    };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 10000);
+      if (RETRYABLE_STATUSES.has(resp.status) && attempt === 0) {
+        await sleep(500);
+        continue;
+      }
+
+      const text = await resp.text();
+      let body;
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = { raw: text };
+      }
+
+      if (!resp.ok) {
+        return {
+          assetId,
+          ok: false,
+          status: resp.status,
+          error: `Failed to fetch metadata for ${assetId}`,
+          details: body
+        };
+      }
+
+      return {
+        assetId,
+        ok: true,
+        status: 200,
+        data: body,
+        etag: resp.headers.get('etag') || null
+      };
+    } catch (err) {
+      lastError = err;
+      if (attempt === 0) {
+        await sleep(500);
+      }
+    }
   }
 
   return {
     assetId,
-    ok: true,
-    status: 200,
-    data: body,
-    etag: resp.headers.get('etag') || null
+    ok: false,
+    status: 504,
+    error: lastError?.message || `Timed out fetching metadata for ${assetId}`
   };
 }
 
@@ -178,7 +207,7 @@ async function handleGetMetadataBatch(aemHost, params) {
   }
 
   const headers = buildHeaders(params);
-  const items = await runWithConcurrency(assetIds, 5, async (assetId) => {
+  const items = await runWithConcurrency(assetIds, 3, async (assetId) => {
     if (!validateAssetId(assetId)) {
       return { assetId, ok: false, status: 400, error: 'Invalid assetId' };
     }

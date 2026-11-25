@@ -140,6 +140,13 @@ export const DEFAULT_SCHEMAS = {
   }
 };
 
+const DEFAULT_ASSET_STATUS_OPTIONS = [
+  { label: 'Draft', value: 'draft' },
+  { label: 'In Review', value: 'inReview' },
+  { label: 'Approved', value: 'approved' },
+  { label: 'Rejected', value: 'rejected' }
+];
+
 /**
  * Maps an AEM Granite / Assets View component resourceType to our renderer type.
  */
@@ -148,6 +155,9 @@ function inferFieldType(node) {
   const prop = normalizePropertyName(node.name || node.mapToProperty || node.property || '');
 
   if (prop === 'cq:tags' || rt.includes('tag')) return { type: 'tags', multiValue: true };
+  if (prop === 'dam:status' || rt.includes('assetstatus') || rt.includes('status')) {
+    return { type: 'select', multiValue: false };
+  }
   if (prop === 'dc:subject' || rt.includes('multifield') || node.multiple === true) {
     return { type: rt.includes('select') ? 'multiselect' : 'keywords', multiValue: true };
   }
@@ -193,7 +203,10 @@ function collectFieldsFromNode(node, fields = []) {
 
   if (property && label && !node.readOnly && !node.disabled) {
     const { type, multiValue } = inferFieldType(node);
-    const options = extractOptions(node);
+    let options = extractOptions(node);
+    if (options.length === 0 && property === 'dam:status') {
+      options = DEFAULT_ASSET_STATUS_OPTIONS;
+    }
     fields.push({
       property,
       label: String(label),

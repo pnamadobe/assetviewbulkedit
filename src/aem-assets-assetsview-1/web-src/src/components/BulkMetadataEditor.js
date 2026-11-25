@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActionButton,
   Button,
@@ -66,6 +66,9 @@ function getCommonFolder(assets) {
 
 export default function BulkMetadataEditor({
   assets,
+  loadErrors = [],
+  retryingLoad = false,
+  onRetryLoad = null,
   thumbnailsById = {},
   availableTags = [],
   schemaRegistry,
@@ -78,6 +81,17 @@ export default function BulkMetadataEditor({
   const [checkedIds, setCheckedIds] = useState(() => new Set(assets.map((a) => a.id)));
   const [dirtyEdits, setDirtyEdits] = useState({});
   const [railOpen, setRailOpen] = useState(true);
+
+  // Automatically check newly loaded assets (e.g. after retrying failed assets)
+  useEffect(() => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      for (const a of assets) {
+        if (!prev.has(a.id)) next.add(a.id);
+      }
+      return next;
+    });
+  }, [assets.length]);
 
   const activeAssets = useMemo(
     () => assets.filter((a) => checkedIds.has(a.id)),
@@ -164,16 +178,16 @@ export default function BulkMetadataEditor({
       height="100%"
       UNSAFE_style={{ backgroundColor: 'var(--spectrum-global-color-gray-50)' }}
     >
-      {/* Clean AEM Assets View Header */}
+      {/* Slim Utility Action Bar (modal host chrome already displays the main title) */}
       <View
-        paddingX="size-300"
-        paddingY="size-150"
+        paddingX="size-250"
+        paddingY="size-100"
         backgroundColor="gray-50"
         borderBottomWidth="thin"
         borderColor="gray-200"
       >
         <Flex alignItems="center" justifyContent="space-between" gap="size-200">
-          <Flex alignItems="center" gap="size-150" minWidth={0}>
+          <Flex alignItems="center" gap="size-125" minWidth={0}>
             <TooltipTrigger delay={300}>
               <ActionButton
                 isQuiet
@@ -185,19 +199,14 @@ export default function BulkMetadataEditor({
               <Tooltip>{railOpen ? 'Hide selected assets' : 'Show selected assets'}</Tooltip>
             </TooltipTrigger>
 
-            <Flex direction="column" minWidth={0}>
-              <Heading level={4} margin={0} UNSAFE_style={{ fontSize: 16, fontWeight: 700 }}>
-                Edit Metadata
-              </Heading>
-              <Text
-                UNSAFE_style={{
-                  fontSize: 12,
-                  color: 'var(--spectrum-global-color-gray-600)'
-                }}
-              >
-                {subtitleParts.join(' · ')}
-              </Text>
-            </Flex>
+            <Text
+              UNSAFE_style={{
+                fontSize: 13,
+                color: 'var(--spectrum-global-color-gray-700)'
+              }}
+            >
+              {subtitleParts.join(' · ')}
+            </Text>
           </Flex>
 
           <div className="aem-s2-pill-buttons">
@@ -321,6 +330,32 @@ export default function BulkMetadataEditor({
         {/* Right Tabbed Metadata Form Canvas */}
         <View flex overflow="auto" paddingX="size-400" paddingY="size-300" backgroundColor="gray-50">
           <Flex direction="column" gap="size-250" maxWidth="920px">
+            {loadErrors.length > 0 && (
+              <InlineAlert variant="notice" width="100%">
+                <Heading>
+                  {loadErrors.length} {loadErrors.length === 1 ? 'asset' : 'assets'} could not be
+                  loaded
+                </Heading>
+                <Content>
+                  <Flex alignItems="center" justifyContent="space-between" gap="size-150" wrap>
+                    <Text>
+                      Some selected assets timed out or failed to load metadata. You can retry
+                      loading them or continue editing the {assets.length} loaded assets.
+                    </Text>
+                    {onRetryLoad && (
+                      <Button
+                        variant="secondary"
+                        onPress={onRetryLoad}
+                        isDisabled={retryingLoad}
+                      >
+                        {retryingLoad ? 'Retrying…' : `Retry (${loadErrors.length})`}
+                      </Button>
+                    )}
+                  </Flex>
+                </Content>
+              </InlineAlert>
+            )}
+
             {saving && saveProgress && (
               <ProgressBar
                 label={`Saving metadata (${saveProgress.completed} of ${saveProgress.total})…`}
