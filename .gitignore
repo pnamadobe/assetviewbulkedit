@@ -3,5 +3,8 @@ dist/
 .parcel-cache/
 .env
 .aio
+*-Stage.json
+*-Production.json
+497CrimsonHyena-*.json
 coverage/
 *.log
