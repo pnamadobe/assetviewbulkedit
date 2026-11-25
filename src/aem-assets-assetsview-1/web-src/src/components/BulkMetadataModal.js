@@ -127,6 +127,21 @@ export default function BulkMetadataModal() {
     guestConnection?.host?.modal?.closeDialog();
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !e.defaultPrevented && !saving) {
+        // Ignore if a Spectrum popover/tray/calendar is currently open
+        if (document.querySelector('[role="dialog"], [role="listbox"]')) {
+          return;
+        }
+        e.preventDefault();
+        guestConnection?.host?.modal?.closeDialog();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [guestConnection, saving]);
+
   const handleRetryFailedLoad = async () => {
     if (!authContext || loadErrors.length === 0 || retryingLoad) return;
     setRetryingLoad(true);
