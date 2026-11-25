@@ -51,9 +51,9 @@ describe('metadataDiff', () => {
 
     const patch0 = buildJsonPatchForAsset(MOCK_ASSETS[0].assetMetadata, dirtyEdits, fieldsByProperty);
     expect(patch0).toEqual([
-      { op: 'replace', path: '/assetMetadata/dc:rights', value: '© 2027 Acme Corp' },
+      { op: 'add', path: '/assetMetadata/dc:rights', value: '© 2027 Acme Corp' },
       {
-        op: 'replace',
+        op: 'add',
         path: '/assetMetadata/cq:tags',
         value: ['brand:spring-2026', 'channel:web', 'campaign:q2-refresh']
       }
@@ -61,9 +61,9 @@ describe('metadataDiff', () => {
 
     const patch1 = buildJsonPatchForAsset(MOCK_ASSETS[1].assetMetadata, dirtyEdits, fieldsByProperty);
     expect(patch1).toEqual([
-      { op: 'replace', path: '/assetMetadata/dc:rights', value: '© 2027 Acme Corp' },
+      { op: 'add', path: '/assetMetadata/dc:rights', value: '© 2027 Acme Corp' },
       {
-        op: 'replace',
+        op: 'add',
         path: '/assetMetadata/cq:tags',
         value: ['brand:spring-2026', 'channel:social', 'campaign:q2-refresh']
       }
@@ -81,11 +81,11 @@ describe('metadataDiff', () => {
     expect(patch).toEqual([
       { op: 'remove', path: '/assetMetadata/dc:title' },
       {
-        op: 'replace',
+        op: 'add',
         path: '/assetMetadata/pur:expirationDate',
         value: '2027-06-30T00:00:00.000Z'
       },
-      { op: 'replace', path: '/assetMetadata/cq:tags', value: ['brand:evergreen'] }
+      { op: 'add', path: '/assetMetadata/cq:tags', value: ['brand:evergreen'] }
     ]);
   });
 });

@@ -172,8 +172,9 @@ export function buildJsonPatchForAsset(assetMetadata = {}, dirtyEdits = {}, fiel
       if (nextValues.length === 0 && hasExisting) {
         operations.push({ op: 'remove', path: pointer });
       } else if (nextValues.length > 0) {
+        // RFC 6902 / AEM Assets Author API: `add` creates if absent AND overwrites if present
         operations.push({
-          op: hasExisting ? 'replace' : 'add',
+          op: 'add',
           path: pointer,
           value: nextValues
         });
@@ -195,7 +196,7 @@ export function buildJsonPatchForAsset(assetMetadata = {}, dirtyEdits = {}, fiel
       }
 
       operations.push({
-        op: hasExisting ? 'replace' : 'add',
+        op: 'add',
         path: pointer,
         value: formatted
       });

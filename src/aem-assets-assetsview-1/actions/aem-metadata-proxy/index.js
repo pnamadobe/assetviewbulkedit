@@ -310,64 +310,83 @@ async function handleGetMetadataBatch(aemHost, params) {
 async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, params) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
 
-  // If the asset was loaded via /adobe/assets/search (no ETag yet), fetch fresh ETag via HEAD
-  let resolvedEtag = etag;
-  if (!resolvedEtag) {
-    try {
-      const headResp = await fetchWithTimeout(
-        url,
-        { method: 'HEAD', headers: buildHeaders(params) },
-        6000
-      );
-      if (headResp.ok) {
-        resolvedEtag = headResp.headers.get('etag') || null;
-      }
-    } catch {
-      // Proceed without ETag if HEAD fails
-    }
-  }
-
+  // AEM Assets Author API requires If-Match; use asset's ETag when available or "*" fallback
   const extraHeaders = {
-    'Content-Type': 'application/json-patch+json'
+    'Content-Type': 'application/json-patch+json',
+    'If-Match': etag || '*'
   };
-  if (resolvedEtag) {
-    extraHeaders['If-Match'] = resolvedEtag;
-  }
 
-  const resp = await fetchWithTimeout(
-    url,
-    {
-      method: 'PATCH',
-      headers: buildHeaders(params, extraHeaders),
-      body: JSON.stringify(patch)
-    },
-    12000
-  );
+  let lastStatus = 504;
+  let lastBody = null;
+  let lastError = null;
 
-  const text = await resp.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    body = { raw: text };
-  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const resp = await fetchWithTimeout(
+        url,
+        {
+          method: 'PATCH',
+          headers: buildHeaders(params, extraHeaders),
+          body: JSON.stringify(patch)
+        },
+        12000
+      );
 
-  if (!resp.ok) {
-    return {
-      assetId,
-      ok: false,
-      status: resp.status,
-      error: `Failed to update metadata for ${assetId}`,
-      details: body
-    };
+      const text = await resp.text();
+      let body;
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = { raw: text };
+      }
+
+      if (resp.ok) {
+        return {
+          assetId,
+          ok: true,
+          status: 200,
+          data: body,
+          etag: resp.headers.get('etag') || null
+        };
+      }
+
+      lastStatus = resp.status;
+      lastBody = body;
+
+      // If 412 Precondition Failed with a stale ETag, retry once with "*"
+      if (resp.status === 412 && extraHeaders['If-Match'] !== '*' && attempt === 0) {
+        extraHeaders['If-Match'] = '*';
+        continue;
+      }
+
+      if (RETRYABLE_STATUSES.has(resp.status) && attempt === 0) {
+        await sleep(500);
+        continue;
+      }
+
+      const detail = body?.detail || body?.title || body?.message || body?.raw || '';
+      return {
+        assetId,
+        ok: false,
+        status: resp.status,
+        error: `HTTP ${resp.status}${detail ? `: ${detail}` : ''}`,
+        details: body
+      };
+    } catch (err) {
+      lastError = err;
+      lastStatus = err?.name === 'AbortError' ? 504 : 502;
+      if (attempt === 0) {
+        await sleep(500);
+      }
+    }
   }
 
   return {
     assetId,
-    ok: true,
-    status: 200,
-    data: body,
-    etag: resp.headers.get('etag') || null
+    ok: false,
+    status: lastStatus,
+    error: lastError?.message || `HTTP ${lastStatus}: PATCH timed out`,
+    details: lastBody
   };
 }
 
@@ -401,7 +420,7 @@ async function handlePatchMetadataBatch(aemHost, params) {
     return errorResponse(400, 'patches must be an array of 1 to 50 patch items');
   }
 
-  const items = await runWithConcurrency(patches, 5, async (entry) => {
+  const items = await runWithConcurrency(patches, 3, async (entry) => {
     if (!entry || !validateAssetId(entry.assetId) || !Array.isArray(entry.patch) || entry.patch.length === 0) {
       return { assetId: entry?.assetId, ok: false, status: 400, error: 'Invalid patch entry' };
     }
