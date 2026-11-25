@@ -393,6 +393,13 @@ async function fetchFolderSchemas(resources, authContext) {
 
       if (result?.found && result.formId && result.assignedAt) {
         folderAssignments[result.assignedAt] = result.formId;
+        console.info('[aem-assets-bulk-metadata] folder form:', {
+          assignedAt: result.assignedAt,
+          formId: result.formId,
+          schemaRef: result.schemaRef,
+          formSourceUrl: result.formSourceUrl,
+          nodeKeys: result.formNode ? Object.keys(result.formNode).slice(0, 15) : null
+        });
         if (result.formNode) {
           const parsed = parseAemSchemaTree({ [result.formId]: result.formNode });
           if (Object.keys(parsed.formsById).length > 0) {
@@ -650,6 +657,7 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
               assetId: asset.id,
               etag: asset.etag,
               patch,
+              singleRetry: true,
               apiKey
             },
             authContext

@@ -323,6 +323,8 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
   let lastBody = null;
   let lastError = null;
 
+  // Max 2 attempts x 12s = ~24.5s worst case (under CloudFront 30s cutoff)
+  const timeoutMs = params.singleRetry ? 20000 : 12000;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const resp = await fetchWithTimeout(
@@ -332,7 +334,7 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
           headers: buildHeaders(params, extraHeaders),
           body: JSON.stringify(currentPatch)
         },
-        9000
+        timeoutMs
       );
 
       const text = await resp.text();
@@ -712,12 +714,15 @@ async function handleGetFolderSchema(aemHost, params) {
       .toLowerCase();
 
     let formNode = null;
+    let formSourceUrl = null;
     const safeSchemaPath = validateSchemaPath(schemaRef);
     if (safeSchemaPath) {
+      // Try file binary first (if dam:Asset or nt:file), then JCR node tree (.infinity.json)
       const fetchCandidates = [
-        `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
         `${aemHost}${encodeJcrPath(safeSchemaPath)}/jcr:content/renditions/original`,
-        `${aemHost}${encodeJcrPath(safeSchemaPath)}`
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}/jcr:content/jcr:data`,
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}`,
+        `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`
       ];
       for (const candidateUrl of fetchCandidates) {
         try {
@@ -726,13 +731,17 @@ async function handleGetFolderSchema(aemHost, params) {
             { method: 'GET', headers, redirect: 'manual' },
             6000
           );
-          if (schemaResp.ok) {
-            const parsed = await schemaResp.json().catch(() => null);
-            if (parsed && typeof parsed === 'object') {
-              formNode = parsed;
-              break;
-            }
+          if (!schemaResp.ok) continue;
+          const parsed = await schemaResp.json().catch(() => null);
+          if (!parsed || typeof parsed !== 'object') continue;
+          // Skip bare JCR file/asset wrapper nodes that don't contain the form JSON itself
+          const pt = parsed['jcr:primaryType'];
+          if ((pt === 'dam:Asset' || pt === 'nt:file') && !parsed.tabs && !parsed.items) {
+            continue;
           }
+          formNode = parsed;
+          formSourceUrl = candidateUrl;
+          break;
         } catch {
           // Try next candidate URL
         }
@@ -747,7 +756,8 @@ async function handleGetFolderSchema(aemHost, params) {
         assignedAt,
         schemaRef,
         formId,
-        formNode
+        formNode,
+        formSourceUrl
       }
     };
   }
