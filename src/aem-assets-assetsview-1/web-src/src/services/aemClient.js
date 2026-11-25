@@ -171,10 +171,45 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
 
   if (proxyUrl && resources.length > 1) {
     const resourceById = new Map(resources.map((r) => [r.id, r]));
-    const chunks = chunkArray(resources, BATCH_CHUNK_SIZE);
+    const loadedIds = new Set();
+
+    // Fast path: fetch up to 50 assets per call via POST /adobe/assets/search
+    for (const searchChunk of chunkArray(resources, 50)) {
+      try {
+        const searchRes = await callProxy(
+          proxyUrl,
+          {
+            operation: 'searchMetadata',
+            aemHost: normalizeHost(authContext.aemHost),
+            assetIds: searchChunk.map((r) => r.id),
+            apiKey: authContext.apiKey
+          },
+          authContext
+        );
+
+        if (searchRes?.available && Array.isArray(searchRes.items)) {
+          for (const item of searchRes.items) {
+            if (item.ok && item.assetId && !loadedIds.has(item.assetId)) {
+              const resource = resourceById.get(item.assetId) || { id: item.assetId };
+              loaded.push(normalizeLoadedAsset(resource, item.data, item.etag));
+              loadedIds.add(item.assetId);
+              completed += 1;
+            }
+          }
+          if (onProgress) {
+            onProgress(completed, resources.length);
+          }
+        }
+      } catch {
+        // Fall through to batch GET for remaining resources
+      }
+    }
+
+    const remainingResources = resources.filter((r) => !loadedIds.has(r.id));
+    const chunks = chunkArray(remainingResources, BATCH_CHUNK_SIZE);
     const failedResources = [];
 
-    // Run chunks sequentially (internal concurrency 3) to avoid AEM Author burst throttling
+    // Fallback for any assets not returned by search: sequential small batches
     for (const chunk of chunks) {
       try {
         const res = await callProxy(

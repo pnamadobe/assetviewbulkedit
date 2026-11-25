@@ -116,7 +116,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 9000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -132,9 +132,10 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
   let lastStatus = 504;
   let lastBody = null;
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // Max 2 attempts x 9s = ~18.5s worst case (always under CloudFront's 30s 504 cutoff)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 20000);
+      const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 9000);
       const text = await resp.text();
       let body;
       try {
@@ -156,11 +157,11 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
       lastStatus = resp.status;
       lastBody = body;
 
-      if (RETRYABLE_STATUSES.has(resp.status) && attempt < 2) {
+      if (RETRYABLE_STATUSES.has(resp.status) && attempt === 0) {
         const retryAfter = Number(resp.headers.get('retry-after'));
         const delayMs = !Number.isNaN(retryAfter) && retryAfter > 0
-          ? Math.min(retryAfter * 1000, 3000)
-          : 400 * Math.pow(3, attempt);
+          ? Math.min(retryAfter * 1000, 1500)
+          : 400;
         await sleep(delayMs);
         continue;
       }
@@ -175,8 +176,8 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
     } catch (err) {
       lastError = err;
       lastStatus = err?.name === 'AbortError' ? 504 : 502;
-      if (attempt < 2) {
-        await sleep(400 * Math.pow(3, attempt));
+      if (attempt === 0) {
+        await sleep(400);
       }
     }
   }
@@ -187,6 +188,76 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
     status: lastStatus,
     error: lastError?.message || `Failed after retries (HTTP ${lastStatus})`,
     details: lastBody
+  };
+}
+
+/**
+ * Fetches metadata for up to 50 assets in ONE single POST /adobe/assets/search call.
+ * Dramatically faster and avoids per-asset rate limiting / 504s.
+ */
+async function handleSearchMetadata(aemHost, params) {
+  const { assetIds } = params;
+  if (!Array.isArray(assetIds) || assetIds.length === 0 || assetIds.length > 50) {
+    return errorResponse(400, 'assetIds must be an array of 1 to 50 asset IDs');
+  }
+
+  const validIds = assetIds.filter((id) => validateAssetId(id));
+  if (validIds.length === 0) {
+    return errorResponse(400, 'No valid assetIds provided');
+  }
+
+  const headers = buildHeaders(params, { 'Content-Type': 'application/json' });
+  const fieldCandidates = ['assetId', 'repositoryMetadata.repo:assetId'];
+
+  for (const fieldName of fieldCandidates) {
+    try {
+      const url = `${aemHost}/adobe/assets/search?allowUnindexedSearch=true`;
+      const resp = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: [{ term: { [fieldName]: validIds } }],
+            limit: Math.min(validIds.length, 50)
+          })
+        },
+        10000
+      );
+
+      if (!resp.ok) {
+        continue;
+      }
+
+      const json = await resp.json().catch(() => null);
+      const results = json?.hits?.results || [];
+      if (results.length > 0) {
+        const items = results.map((hit) => ({
+          assetId: hit.assetId || hit.repositoryMetadata?.['repo:assetId'],
+          ok: true,
+          status: 200,
+          data: {
+            assetId: hit.assetId,
+            assetMetadata: hit.assetMetadata || {},
+            repositoryMetadata: hit.repositoryMetadata || {}
+          },
+          etag: null
+        }));
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: { available: true, items }
+        };
+      }
+    } catch {
+      // Fall through to next field candidate or caller fallback
+    }
+  }
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: { available: false, items: [] }
   };
 }
 
@@ -238,11 +309,29 @@ async function handleGetMetadataBatch(aemHost, params) {
 
 async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, params) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
+
+  // If the asset was loaded via /adobe/assets/search (no ETag yet), fetch fresh ETag via HEAD
+  let resolvedEtag = etag;
+  if (!resolvedEtag) {
+    try {
+      const headResp = await fetchWithTimeout(
+        url,
+        { method: 'HEAD', headers: buildHeaders(params) },
+        6000
+      );
+      if (headResp.ok) {
+        resolvedEtag = headResp.headers.get('etag') || null;
+      }
+    } catch {
+      // Proceed without ETag if HEAD fails
+    }
+  }
+
   const extraHeaders = {
     'Content-Type': 'application/json-patch+json'
   };
-  if (etag) {
-    extraHeaders['If-Match'] = etag;
+  if (resolvedEtag) {
+    extraHeaders['If-Match'] = resolvedEtag;
   }
 
   const resp = await fetchWithTimeout(
@@ -252,7 +341,7 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
       headers: buildHeaders(params, extraHeaders),
       body: JSON.stringify(patch)
     },
-    15000
+    12000
   );
 
   const text = await resp.text();
@@ -626,6 +715,8 @@ async function main(params) {
         return await handleGetMetadata(aemHost, params);
       case 'getMetadataBatch':
         return await handleGetMetadataBatch(aemHost, params);
+      case 'searchMetadata':
+        return await handleSearchMetadata(aemHost, params);
       case 'patchMetadata':
         return await handlePatchMetadata(aemHost, params);
       case 'patchMetadataBatch':
