@@ -94,18 +94,25 @@ function buildHeaders(params, extraHeaders = {}) {
   return headers;
 }
 
-async function handleGetMetadata(aemHost, params) {
-  const { assetId } = params;
-  if (!validateAssetId(assetId)) {
-    return errorResponse(400, 'Invalid or missing assetId');
+async function runWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await worker(items[idx], idx);
+    }
   }
 
-  const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: buildHeaders(params)
-  });
+  const count = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: count }, () => runWorker()));
+  return results;
+}
 
+async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
+  const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
+  const resp = await fetch(url, { method: 'GET', headers });
   const text = await resp.text();
   let body;
   try {
@@ -115,28 +122,71 @@ async function handleGetMetadata(aemHost, params) {
   }
 
   if (!resp.ok) {
-    return errorResponse(resp.status, `Failed to fetch metadata for ${assetId}`, body);
+    return {
+      assetId,
+      ok: false,
+      status: resp.status,
+      error: `Failed to fetch metadata for ${assetId}`,
+      details: body
+    };
+  }
+
+  return {
+    assetId,
+    ok: true,
+    status: 200,
+    data: body,
+    etag: resp.headers.get('etag') || null
+  };
+}
+
+async function handleGetMetadata(aemHost, params) {
+  const { assetId } = params;
+  if (!validateAssetId(assetId)) {
+    return errorResponse(400, 'Invalid or missing assetId');
+  }
+
+  const res = await fetchSingleAssetMetadata(aemHost, assetId, buildHeaders(params));
+  if (!res.ok) {
+    return errorResponse(res.status, res.error, res.details);
   }
 
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json' },
     body: {
-      ...body,
-      etag: resp.headers.get('etag') || null
+      ...res.data,
+      etag: res.etag
     }
   };
 }
 
-async function handlePatchMetadata(aemHost, params) {
-  const { assetId, etag, patch } = params;
-  if (!validateAssetId(assetId)) {
-    return errorResponse(400, 'Invalid or missing assetId');
-  }
-  if (!Array.isArray(patch) || patch.length === 0) {
-    return errorResponse(400, 'patch must be a non-empty JSON Patch array');
+async function handleGetMetadataBatch(aemHost, params) {
+  const { assetIds } = params;
+  if (!Array.isArray(assetIds) || assetIds.length === 0 || assetIds.length > 50) {
+    return errorResponse(400, 'assetIds must be an array of 1 to 50 asset IDs');
   }
 
+  const headers = buildHeaders(params);
+  const items = await runWithConcurrency(assetIds, 10, async (assetId) => {
+    if (!validateAssetId(assetId)) {
+      return { assetId, ok: false, status: 400, error: 'Invalid assetId' };
+    }
+    try {
+      return await fetchSingleAssetMetadata(aemHost, assetId, headers);
+    } catch (err) {
+      return { assetId, ok: false, status: 502, error: err.message };
+    }
+  });
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: { items }
+  };
+}
+
+async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, params) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
   const extraHeaders = {
     'Content-Type': 'application/json-patch+json'
@@ -160,16 +210,69 @@ async function handlePatchMetadata(aemHost, params) {
   }
 
   if (!resp.ok) {
-    return errorResponse(resp.status, `Failed to update metadata for ${assetId}`, body);
+    return {
+      assetId,
+      ok: false,
+      status: resp.status,
+      error: `Failed to update metadata for ${assetId}`,
+      details: body
+    };
+  }
+
+  return {
+    assetId,
+    ok: true,
+    status: 200,
+    data: body,
+    etag: resp.headers.get('etag') || null
+  };
+}
+
+async function handlePatchMetadata(aemHost, params) {
+  const { assetId, etag, patch } = params;
+  if (!validateAssetId(assetId)) {
+    return errorResponse(400, 'Invalid or missing assetId');
+  }
+  if (!Array.isArray(patch) || patch.length === 0) {
+    return errorResponse(400, 'patch must be a non-empty JSON Patch array');
+  }
+
+  const res = await patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, params);
+  if (!res.ok) {
+    return errorResponse(res.status, res.error, res.details);
   }
 
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json' },
     body: {
-      ...body,
-      etag: resp.headers.get('etag') || null
+      ...res.data,
+      etag: res.etag
     }
+  };
+}
+
+async function handlePatchMetadataBatch(aemHost, params) {
+  const { patches } = params;
+  if (!Array.isArray(patches) || patches.length === 0 || patches.length > 50) {
+    return errorResponse(400, 'patches must be an array of 1 to 50 patch items');
+  }
+
+  const items = await runWithConcurrency(patches, 8, async (entry) => {
+    if (!entry || !validateAssetId(entry.assetId) || !Array.isArray(entry.patch) || entry.patch.length === 0) {
+      return { assetId: entry?.assetId, ok: false, status: 400, error: 'Invalid patch entry' };
+    }
+    try {
+      return await patchSingleAssetMetadata(aemHost, entry, params);
+    } catch (err) {
+      return { assetId: entry.assetId, ok: false, status: 502, error: err.message };
+    }
+  });
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: { items }
   };
 }
 
@@ -223,9 +326,8 @@ async function handleGetMetadataForms(aemHost, params) {
 }
 
 /**
- * Walks up a DAM folder path to `/content/dam`, reading `<folder>/jcr:content.json`
- * to find any folder-assigned metadata schema/form property. If found and the value
- * is a JCR schema path, also fetches that schema node directly.
+ * Checks all ancestor folders from `folderPath` up to `/content/dam` IN PARALLEL
+ * for a folder-assigned metadata schema/form property, picking the deepest match.
  */
 async function handleGetFolderSchema(aemHost, params) {
   const folderPath = validateDamPath(params.folderPath);
@@ -235,55 +337,65 @@ async function handleGetFolderSchema(aemHost, params) {
 
   const headers = buildHeaders(params);
   const parts = folderPath.split('/').filter(Boolean);
+  const candidates = [];
+  for (let len = parts.length; len >= 2; len -= 1) {
+    candidates.push('/' + parts.slice(0, len).join('/'));
+  }
 
-  while (parts.length >= 2) {
-    const candidate = '/' + parts.join('/');
-    const url = `${aemHost}${encodeJcrPath(candidate)}/jcr:content.json`;
-
-    try {
-      const resp = await fetch(url, { method: 'GET', headers });
-      if (resp.ok) {
+  const checks = await Promise.all(
+    candidates.map(async (candidate) => {
+      const url = `${aemHost}${encodeJcrPath(candidate)}/jcr:content.json`;
+      try {
+        const resp = await fetch(url, { method: 'GET', headers });
+        if (!resp.ok) return null;
         const jcrContent = await resp.json().catch(() => null);
-        if (jcrContent && typeof jcrContent === 'object') {
-          for (const propName of FOLDER_SCHEMA_PROPS) {
-            const rawVal = jcrContent[propName];
-            if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
-              const schemaRef = rawVal.trim();
-              const formId = schemaRef.split('/').filter(Boolean).pop().toLowerCase();
+        if (!jcrContent || typeof jcrContent !== 'object') return null;
 
-              let formNode = null;
-              const safeSchemaPath = validateSchemaPath(schemaRef);
-              if (safeSchemaPath) {
-                const schemaResp = await fetch(
-                  `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
-                  { method: 'GET', headers }
-                );
-                if (schemaResp.ok) {
-                  formNode = await schemaResp.json().catch(() => null);
-                }
-              }
-
-              return {
-                statusCode: 200,
-                headers: { 'Content-Type': 'application/json' },
-                body: {
-                  found: true,
-                  assignedAt: candidate,
-                  property: propName,
-                  schemaRef,
-                  formId,
-                  formNode
-                }
-              };
-            }
+        for (const propName of FOLDER_SCHEMA_PROPS) {
+          const rawVal = jcrContent[propName];
+          if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+            return { candidate, propName, schemaRef: rawVal.trim() };
           }
         }
+      } catch {
+        // Ignore individual ancestor read errors
       }
-    } catch {
-      // Continue walking up to parent folder
+      return null;
+    })
+  );
+
+  // Pick the deepest (first) matching ancestor
+  const match = checks.find(Boolean);
+  if (match) {
+    const formId = match.schemaRef.split('/').filter(Boolean).pop().toLowerCase();
+    let formNode = null;
+    const safeSchemaPath = validateSchemaPath(match.schemaRef);
+    if (safeSchemaPath) {
+      try {
+        const schemaResp = await fetch(
+          `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
+          { method: 'GET', headers }
+        );
+        if (schemaResp.ok) {
+          formNode = await schemaResp.json().catch(() => null);
+        }
+      } catch {
+        // Fall back to forms tree
+      }
     }
 
-    parts.pop();
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        found: true,
+        assignedAt: match.candidate,
+        property: match.propName,
+        schemaRef: match.schemaRef,
+        formId,
+        formNode
+      }
+    };
   }
 
   return {
@@ -374,8 +486,12 @@ async function main(params) {
     switch (params.operation) {
       case 'getMetadata':
         return await handleGetMetadata(aemHost, params);
+      case 'getMetadataBatch':
+        return await handleGetMetadataBatch(aemHost, params);
       case 'patchMetadata':
         return await handlePatchMetadata(aemHost, params);
+      case 'patchMetadataBatch':
+        return await handlePatchMetadataBatch(aemHost, params);
       case 'getMetadataForms':
         return await handleGetMetadataForms(aemHost, params);
       case 'getFolderSchema':
@@ -385,7 +501,7 @@ async function main(params) {
       default:
         return errorResponse(
           400,
-          'Unsupported operation. Expected one of: getMetadata, patchMetadata, getMetadataForms, getFolderSchema, getThumbnail'
+          'Unsupported operation. Expected one of: getMetadata, getMetadataBatch, patchMetadata, patchMetadataBatch, getMetadataForms, getFolderSchema, getThumbnail'
         );
     }
   } catch (err) {

@@ -54,5 +54,21 @@ describe('aem-metadata-proxy action', () => {
       operation: 'deleteEverything'
     });
     expect(badOp.statusCode).toBe(400);
+
+    const emptyBatch = await main({
+      __ow_headers: { authorization: 'Bearer test-token' },
+      aemHost: 'https://author-p12345-e67890.adobeaemcloud.com',
+      operation: 'getMetadataBatch',
+      assetIds: []
+    });
+    expect(emptyBatch.statusCode).toBe(400);
+
+    const emptyPatchBatch = await main({
+      __ow_headers: { authorization: 'Bearer test-token' },
+      aemHost: 'https://author-p12345-e67890.adobeaemcloud.com',
+      operation: 'patchMetadataBatch',
+      patches: []
+    });
+    expect(emptyPatchBatch.statusCode).toBe(400);
   });
 });

@@ -10,6 +10,33 @@ import { createSchemaRegistry, parseAemSchemaTree } from './schemaResolver';
 import { buildJsonPatchForAsset } from './metadataDiff';
 
 const DEFAULT_CONCURRENCY = 5;
+const BATCH_CHUNK_SIZE = 25;
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function normalizeLoadedAsset(resource, data, etag) {
+  const repoMeta = data?.repositoryMetadata || {};
+  const assetMeta = data?.assetMetadata || {};
+  const name =
+    repoMeta['repo:name'] ||
+    (resource.path ? resource.path.split('/').pop() : resource.id);
+
+  return {
+    id: resource.id,
+    path: resource.path || repoMeta['repo:path'] || '',
+    name,
+    mimeType: repoMeta['dc:format'] || assetMeta['dc:format'] || '',
+    etag: etag || null,
+    assetMetadata: assetMeta,
+    repositoryMetadata: repoMeta
+  };
+}
 
 function getProxyUrl() {
   return (
@@ -132,12 +159,66 @@ export async function fetchAssetMetadata(resource, authContext) {
 }
 
 /**
- * Fetches metadata for all selected assets with bounded concurrency.
+ * Fetches metadata for all selected assets.
+ * When using the App Builder proxy, batches up to 25 assets into a single HTTP request
+ * (`getMetadataBatch`) so Runtime fetches them in parallel over Adobe's internal network.
  */
 export async function fetchAllAssetsMetadata(resources, authContext, onProgress) {
+  const proxyUrl = getProxyUrl();
   let completed = 0;
   const loaded = [];
   const errors = [];
+
+  if (proxyUrl && resources.length > 1) {
+    const resourceById = new Map(resources.map((r) => [r.id, r]));
+    const chunks = chunkArray(resources, BATCH_CHUNK_SIZE);
+
+    for (const chunk of chunks) {
+      try {
+        const res = await callProxy(
+          proxyUrl,
+          {
+            operation: 'getMetadataBatch',
+            aemHost: normalizeHost(authContext.aemHost),
+            assetIds: chunk.map((r) => r.id),
+            apiKey: authContext.apiKey
+          },
+          authContext
+        );
+
+        for (const item of res.items || []) {
+          const resource = resourceById.get(item.assetId) || { id: item.assetId };
+          if (item.ok) {
+            loaded.push(normalizeLoadedAsset(resource, item.data, item.etag));
+          } else {
+            errors.push({
+              id: resource.id,
+              path: resource.path,
+              message: item.error || `Failed (${item.status})`,
+              status: item.status
+            });
+          }
+          completed += 1;
+        }
+      } catch (err) {
+        for (const resource of chunk) {
+          errors.push({
+            id: resource.id,
+            path: resource.path,
+            message: err.message,
+            status: err.status
+          });
+          completed += 1;
+        }
+      }
+
+      if (onProgress) {
+        onProgress(completed, resources.length);
+      }
+    }
+
+    return { assets: loaded, errors };
+  }
 
   await mapWithConcurrency(resources, DEFAULT_CONCURRENCY, async (resource) => {
     try {
@@ -188,6 +269,7 @@ async function fetchFolderSchemas(resources, authContext) {
 
   const formsById = {};
   const folderAssignments = {};
+  let resolvedCount = 0;
 
   await mapWithConcurrency(uniqueFolders, DEFAULT_CONCURRENCY, async (folderPath) => {
     try {
@@ -242,7 +324,10 @@ async function fetchFolderSchemas(resources, authContext) {
         folderAssignments[result.assignedAt] = result.formId;
         if (result.formNode) {
           const parsed = parseAemSchemaTree({ [result.formId]: result.formNode });
-          Object.assign(formsById, parsed.formsById);
+          if (Object.keys(parsed.formsById).length > 0) {
+            Object.assign(formsById, parsed.formsById);
+            resolvedCount += 1;
+          }
         }
       }
     } catch {
@@ -250,7 +335,7 @@ async function fetchFolderSchemas(resources, authContext) {
     }
   });
 
-  return { formsById, folderAssignments };
+  return { formsById, folderAssignments, allResolved: uniqueFolders.length > 0 && resolvedCount === uniqueFolders.length };
 }
 
 /**
@@ -268,6 +353,14 @@ export async function fetchSchemaRegistry(authContext, resources = []) {
   const folderResult = await fetchFolderSchemas(resources, authContext);
   Object.assign(mergedFormsById, folderResult.formsById);
   Object.assign(mergedFolderAssignments, folderResult.folderAssignments);
+
+  // If every selected folder resolved its exact schema directly, skip downloading the full forms tree
+  if (folderResult.allResolved) {
+    return createSchemaRegistry({
+      formsById: mergedFormsById,
+      folderAssignments: mergedFolderAssignments
+    });
+  }
 
   // 2. Load organization metadata forms tree (Assets View first, then Admin View)
   for (const source of ['assetsview', 'admin']) {
@@ -359,6 +452,7 @@ export async function fetchAssetThumbnails(assets, authContext, onThumbnail) {
 
 /**
  * Applies bulk metadata edits to all selected assets using RFC 6902 JSON Patch.
+ * Batches up to 25 patches per proxy call when using the App Builder proxy.
  */
 export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, authContext, onProgress) {
   const { aemHost, accessToken, apiKey } = authContext;
@@ -369,15 +463,78 @@ export async function saveBulkMetadata(assets, dirtyEdits, fieldsByProperty, aut
   const skipped = [];
   const failed = [];
 
-  await mapWithConcurrency(assets, DEFAULT_CONCURRENCY, async (asset) => {
+  const toPatch = [];
+  for (const asset of assets) {
     const patch = buildJsonPatchForAsset(asset.assetMetadata, dirtyEdits, fieldsByProperty);
     if (patch.length === 0) {
       skipped.push({ id: asset.id, name: asset.name, path: asset.path });
       completed += 1;
-      if (onProgress) onProgress(completed, assets.length);
-      return;
+    } else {
+      toPatch.push({ asset, patch });
+    }
+  }
+  if (onProgress && skipped.length > 0) {
+    onProgress(completed, assets.length);
+  }
+
+  if (proxyUrl && toPatch.length > 1) {
+    const assetById = new Map(toPatch.map(({ asset }) => [asset.id, asset]));
+    const chunks = chunkArray(toPatch, BATCH_CHUNK_SIZE);
+
+    for (const chunk of chunks) {
+      try {
+        const res = await callProxy(
+          proxyUrl,
+          {
+            operation: 'patchMetadataBatch',
+            aemHost: normalizeHost(aemHost),
+            patches: chunk.map(({ asset, patch }) => ({
+              assetId: asset.id,
+              etag: asset.etag,
+              patch
+            })),
+            apiKey
+          },
+          authContext
+        );
+
+        for (const item of res.items || []) {
+          const asset = assetById.get(item.assetId) || { id: item.assetId, name: item.assetId };
+          if (item.ok) {
+            succeeded.push({ id: asset.id, name: asset.name, path: asset.path });
+          } else {
+            failed.push({
+              id: asset.id,
+              name: asset.name,
+              path: asset.path,
+              status: item.status,
+              message: item.error || `PATCH failed (${item.status})`
+            });
+          }
+          completed += 1;
+        }
+      } catch (err) {
+        for (const { asset } of chunk) {
+          failed.push({
+            id: asset.id,
+            name: asset.name,
+            path: asset.path,
+            status: err.status,
+            message: err.message
+          });
+          completed += 1;
+        }
+      }
+
+      if (onProgress) {
+        onProgress(completed, assets.length);
+      }
     }
 
+    return { succeeded, skipped, failed };
+  }
+
+  await mapWithConcurrency(toPatch, DEFAULT_CONCURRENCY, async ({ asset, patch }) => {
     try {
       if (proxyUrl) {
         await callProxy(
