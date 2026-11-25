@@ -6,13 +6,12 @@ export const extensionId = 'aem-assets-bulk-metadata';
 export const SUPPORTED_CONTEXTS = new Set(['assets', 'search', 'collections']);
 
 /**
- * Built-in action IDs to hide / intercept when 2 or more assets are selected.
- * Assets View documents "edit" in its built-in action list; we also include
- * "bulkMetadataEdit" / "bulkEdit" in case the host maps the Bulk Metadata Edit
- * button to one of those IDs.
+ * Built-in action interception toggle.
+ * Note: AEM Assets View does not currently expose a hideable built-in action ID
+ * for "Bulk Metadata Edit" (returning undocumented IDs in getHiddenBuiltInActions
+ * can cause Assets View to drop the extension's actionBar actions).
  */
-export const OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT = true;
-export const HIDE_BUILTIN_BULK_EDIT_IDS = ['edit', 'bulkMetadataEdit', 'bulkEdit'];
+export const OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT = false;
 
 /**
  * Maximum number of assets recommended in a single client-side bulk edit session.

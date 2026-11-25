@@ -4,8 +4,7 @@ import { register } from '@adobe/uix-guest';
 import {
   extensionId,
   SUPPORTED_CONTEXTS,
-  OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT,
-  HIDE_BUILTIN_BULK_EDIT_IDS
+  OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT
 } from './Constants';
 
 /**
@@ -60,22 +59,14 @@ export default function ExtensionRegistration() {
               ];
             },
 
-            async getHiddenBuiltInActions({ context, resourceSelection }) {
-              if (!SUPPORTED_CONTEXTS.has(context)) {
-                return [];
-              }
-              const assets = filterAssetResources(resourceSelection);
-              if (assets.length >= 2) {
-                return HIDE_BUILTIN_BULK_EDIT_IDS;
-              }
+            async getHiddenBuiltInActions() {
               return [];
             },
 
             async overrideBuiltInAction({ actionId, context, resourceSelection }) {
-              console.debug('[aem-assets-bulk-metadata] built-in action triggered:', actionId);
               if (
                 OVERRIDE_BUILTIN_EDIT_ON_MULTISELECT &&
-                HIDE_BUILTIN_BULK_EDIT_IDS.includes(actionId) &&
+                actionId === 'edit' &&
                 SUPPORTED_CONTEXTS.has(context)
               ) {
                 const assets = filterAssetResources(resourceSelection);
