@@ -110,13 +110,13 @@ async function runWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -129,15 +129,12 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
 async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
   let lastError = null;
+  let lastStatus = 504;
+  let lastBody = null;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 10000);
-      if (RETRYABLE_STATUSES.has(resp.status) && attempt === 0) {
-        await sleep(500);
-        continue;
-      }
-
+      const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 20000);
       const text = await resp.text();
       let body;
       try {
@@ -146,27 +143,40 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
         body = { raw: text };
       }
 
-      if (!resp.ok) {
+      if (resp.ok) {
         return {
           assetId,
-          ok: false,
-          status: resp.status,
-          error: `Failed to fetch metadata for ${assetId}`,
-          details: body
+          ok: true,
+          status: 200,
+          data: body,
+          etag: resp.headers.get('etag') || null
         };
+      }
+
+      lastStatus = resp.status;
+      lastBody = body;
+
+      if (RETRYABLE_STATUSES.has(resp.status) && attempt < 2) {
+        const retryAfter = Number(resp.headers.get('retry-after'));
+        const delayMs = !Number.isNaN(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 3000)
+          : 400 * Math.pow(3, attempt);
+        await sleep(delayMs);
+        continue;
       }
 
       return {
         assetId,
-        ok: true,
-        status: 200,
-        data: body,
-        etag: resp.headers.get('etag') || null
+        ok: false,
+        status: resp.status,
+        error: `Failed to fetch metadata (${resp.status})`,
+        details: body
       };
     } catch (err) {
       lastError = err;
-      if (attempt === 0) {
-        await sleep(500);
+      lastStatus = err?.name === 'AbortError' ? 504 : 502;
+      if (attempt < 2) {
+        await sleep(400 * Math.pow(3, attempt));
       }
     }
   }
@@ -174,8 +184,9 @@ async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
   return {
     assetId,
     ok: false,
-    status: 504,
-    error: lastError?.message || `Timed out fetching metadata for ${assetId}`
+    status: lastStatus,
+    error: lastError?.message || `Failed after retries (HTTP ${lastStatus})`,
+    details: lastBody
   };
 }
 

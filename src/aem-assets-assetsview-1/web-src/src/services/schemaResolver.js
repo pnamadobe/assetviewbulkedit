@@ -147,15 +147,32 @@ const DEFAULT_ASSET_STATUS_OPTIONS = [
   { label: 'Rejected', value: 'rejected' }
 ];
 
+const DEFAULT_ACTIVATION_TARGET_OPTIONS = [
+  { label: 'Delivery', value: 'delivery' },
+  { label: 'Content Hub', value: 'contenthub' }
+];
+
+const STATUS_PROPERTIES = new Set(['dam:status', 'dam:assetStatus', 'assetStatus']);
+const TARGET_PROPERTIES = new Set(['dam:activationTarget', 'activationTarget']);
+
 /**
  * Maps an AEM Granite / Assets View component resourceType to our renderer type.
  */
 function inferFieldType(node) {
   const rt = (node['sling:resourceType'] || node.type || '').toLowerCase();
   const prop = normalizePropertyName(node.name || node.mapToProperty || node.property || '');
+  const label = String(node.fieldLabel || node.label || node['jcr:title'] || '').toLowerCase();
 
   if (prop === 'cq:tags' || rt.includes('tag')) return { type: 'tags', multiValue: true };
-  if (prop === 'dam:status' || rt.includes('assetstatus') || rt.includes('status')) {
+  if (
+    STATUS_PROPERTIES.has(prop) ||
+    TARGET_PROPERTIES.has(prop) ||
+    rt.includes('assetstatus') ||
+    rt.includes('activationtarget') ||
+    label === 'asset status' ||
+    label === 'approval target' ||
+    label === 'approval for'
+  ) {
     return { type: 'select', multiValue: false };
   }
   if (prop === 'dc:subject' || rt.includes('multifield') || node.multiple === true) {
@@ -180,9 +197,15 @@ function extractOptions(node) {
 
   const entries = Array.isArray(items) ? items : Object.values(items);
   for (const item of entries) {
-    if (item && typeof item === 'object' && ('value' in item || 'text' in item || 'label' in item)) {
-      const value = item.value ?? item.text ?? item.label;
-      const label = item.text ?? item.label ?? String(value);
+    if (typeof item === 'string' && item.trim()) {
+      options.push({ label: item.trim(), value: item.trim() });
+    } else if (
+      item &&
+      typeof item === 'object' &&
+      ('value' in item || 'text' in item || 'label' in item || 'jcr:title' in item)
+    ) {
+      const value = item.value ?? item.text ?? item.label ?? item['jcr:title'];
+      const label = item.text ?? item.label ?? item['jcr:title'] ?? String(value);
       if (value !== undefined && value !== null) {
         options.push({ label: String(label), value: String(value) });
       }
@@ -203,9 +226,17 @@ function collectFieldsFromNode(node, fields = []) {
 
   if (property && label && !node.readOnly && !node.disabled) {
     const { type, multiValue } = inferFieldType(node);
+    const lowerLabel = String(label).toLowerCase();
     let options = extractOptions(node);
-    if (options.length === 0 && property === 'dam:status') {
+    if (options.length === 0 && (STATUS_PROPERTIES.has(property) || lowerLabel === 'asset status')) {
       options = DEFAULT_ASSET_STATUS_OPTIONS;
+    } else if (
+      options.length === 0 &&
+      (TARGET_PROPERTIES.has(property) ||
+        lowerLabel === 'approval target' ||
+        lowerLabel === 'approval for')
+    ) {
+      options = DEFAULT_ACTIVATION_TARGET_OPTIONS;
     }
     fields.push({
       property,

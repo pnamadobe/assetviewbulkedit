@@ -337,20 +337,33 @@ export default function BulkMetadataEditor({
                   loaded
                 </Heading>
                 <Content>
-                  <Flex alignItems="center" justifyContent="space-between" gap="size-150" wrap>
-                    <Text>
-                      Some selected assets timed out or failed to load metadata. You can retry
-                      loading them or continue editing the {assets.length} loaded assets.
-                    </Text>
-                    {onRetryLoad && (
-                      <Button
-                        variant="secondary"
-                        onPress={onRetryLoad}
-                        isDisabled={retryingLoad}
-                      >
-                        {retryingLoad ? 'Retrying…' : `Retry (${loadErrors.length})`}
-                      </Button>
-                    )}
+                  <Flex direction="column" gap="size-100">
+                    <Flex alignItems="center" justifyContent="space-between" gap="size-150" wrap>
+                      <Text>
+                        The following selected items could not be loaded (you can retry or continue
+                        editing the {assets.length} loaded assets):
+                      </Text>
+                      {onRetryLoad && (
+                        <Button
+                          variant="secondary"
+                          onPress={onRetryLoad}
+                          isDisabled={retryingLoad}
+                        >
+                          {retryingLoad ? 'Retrying…' : `Retry (${loadErrors.length})`}
+                        </Button>
+                      )}
+                    </Flex>
+                    <div style={{ fontSize: 12, opacity: 0.85 }}>
+                      {loadErrors.map((err) => {
+                        const label = err.path ? err.path.split('/').pop() : err.id;
+                        return (
+                          <div key={err.id}>
+                            <strong>{label}</strong>
+                            {err.status ? ` (HTTP ${err.status})` : ''}: {err.message}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </Flex>
                 </Content>
               </InlineAlert>

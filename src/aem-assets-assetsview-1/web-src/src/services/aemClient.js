@@ -208,9 +208,10 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
       }
     }
 
-    // Gentle retry pass for any transiently failed assets (concurrency 2)
+    // Gentle sequential retry pass for any transiently failed assets (with brief cooldown)
     if (failedResources.length > 0) {
-      await mapWithConcurrency(failedResources, 2, async (resource) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      for (const resource of failedResources) {
         try {
           const asset = await fetchAssetMetadata(resource, authContext);
           loaded.push(asset);
@@ -227,7 +228,7 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
             onProgress(completed, resources.length);
           }
         }
-      });
+      }
     }
 
     // Preserve original selection order
