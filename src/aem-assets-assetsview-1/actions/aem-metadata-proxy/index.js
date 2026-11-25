@@ -110,9 +110,19 @@ async function runWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchSingleAssetMetadata(aemHost, assetId, headers) {
   const url = `${aemHost}/adobe/assets/${encodeURIComponent(assetId)}/metadata`;
-  const resp = await fetch(url, { method: 'GET', headers });
+  const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 12000);
   const text = await resp.text();
   let body;
   try {
@@ -168,7 +178,7 @@ async function handleGetMetadataBatch(aemHost, params) {
   }
 
   const headers = buildHeaders(params);
-  const items = await runWithConcurrency(assetIds, 10, async (assetId) => {
+  const items = await runWithConcurrency(assetIds, 5, async (assetId) => {
     if (!validateAssetId(assetId)) {
       return { assetId, ok: false, status: 400, error: 'Invalid assetId' };
     }
@@ -195,11 +205,15 @@ async function patchSingleAssetMetadata(aemHost, { assetId, etag, patch }, param
     extraHeaders['If-Match'] = etag;
   }
 
-  const resp = await fetch(url, {
-    method: 'PATCH',
-    headers: buildHeaders(params, extraHeaders),
-    body: JSON.stringify(patch)
-  });
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: 'PATCH',
+      headers: buildHeaders(params, extraHeaders),
+      body: JSON.stringify(patch)
+    },
+    15000
+  );
 
   const text = await resp.text();
   let body;
@@ -258,7 +272,7 @@ async function handlePatchMetadataBatch(aemHost, params) {
     return errorResponse(400, 'patches must be an array of 1 to 50 patch items');
   }
 
-  const items = await runWithConcurrency(patches, 8, async (entry) => {
+  const items = await runWithConcurrency(patches, 5, async (entry) => {
     if (!entry || !validateAssetId(entry.assetId) || !Array.isArray(entry.patch) || entry.patch.length === 0) {
       return { assetId: entry?.assetId, ok: false, status: 400, error: 'Invalid patch entry' };
     }
@@ -284,12 +298,17 @@ async function handleGetMetadataForms(aemHost, params) {
       : '/content/dam/appdata/metadataforms.infinity.json';
 
   const url = `${aemHost}${formPath}`;
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: buildHeaders(params)
-  });
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: 'GET',
+      headers: buildHeaders(params),
+      redirect: 'manual'
+    },
+    6000
+  );
 
-  if (resp.status === 404 || resp.status === 403) {
+  if (resp.status === 404 || resp.status === 403 || (resp.status >= 300 && resp.status < 400)) {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -346,7 +365,11 @@ async function handleGetFolderSchema(aemHost, params) {
     candidates.map(async (candidate) => {
       const url = `${aemHost}${encodeJcrPath(candidate)}/jcr:content.json`;
       try {
-        const resp = await fetch(url, { method: 'GET', headers });
+        const resp = await fetchWithTimeout(
+          url,
+          { method: 'GET', headers, redirect: 'manual' },
+          5000
+        );
         if (!resp.ok) return null;
         const jcrContent = await resp.json().catch(() => null);
         if (!jcrContent || typeof jcrContent !== 'object') return null;
@@ -372,9 +395,10 @@ async function handleGetFolderSchema(aemHost, params) {
     const safeSchemaPath = validateSchemaPath(match.schemaRef);
     if (safeSchemaPath) {
       try {
-        const schemaResp = await fetch(
+        const schemaResp = await fetchWithTimeout(
           `${aemHost}${encodeJcrPath(safeSchemaPath)}.infinity.json`,
-          { method: 'GET', headers }
+          { method: 'GET', headers, redirect: 'manual' },
+          6000
         );
         if (schemaResp.ok) {
           formNode = await schemaResp.json().catch(() => null);
@@ -437,7 +461,11 @@ async function handleGetThumbnail(aemHost, params) {
 
   for (const url of candidates) {
     try {
-      const resp = await fetch(url, { method: 'GET', headers });
+      const resp = await fetchWithTimeout(
+        url,
+        { method: 'GET', headers, redirect: 'manual' },
+        5000
+      );
       if (resp.ok) {
         const contentType = resp.headers.get('content-type') || 'image/png';
         if (contentType.startsWith('image/')) {

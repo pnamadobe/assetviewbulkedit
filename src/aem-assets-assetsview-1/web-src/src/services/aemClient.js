@@ -10,7 +10,7 @@ import { createSchemaRegistry, parseAemSchemaTree } from './schemaResolver';
 import { buildJsonPatchForAsset } from './metadataDiff';
 
 const DEFAULT_CONCURRENCY = 5;
-const BATCH_CHUNK_SIZE = 25;
+const BATCH_CHUNK_SIZE = 5;
 
 function chunkArray(items, size) {
   const chunks = [];
@@ -173,7 +173,7 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
     const resourceById = new Map(resources.map((r) => [r.id, r]));
     const chunks = chunkArray(resources, BATCH_CHUNK_SIZE);
 
-    for (const chunk of chunks) {
+    await mapWithConcurrency(chunks, 2, async (chunk) => {
       try {
         const res = await callProxy(
           proxyUrl,
@@ -200,22 +200,31 @@ export async function fetchAllAssetsMetadata(resources, authContext, onProgress)
           }
           completed += 1;
         }
-      } catch (err) {
-        for (const resource of chunk) {
-          errors.push({
-            id: resource.id,
-            path: resource.path,
-            message: err.message,
-            status: err.status
-          });
-          completed += 1;
+        if (onProgress) {
+          onProgress(completed, resources.length);
         }
+      } catch {
+        // Automatic fallback to per-asset calls if a batch hits a gateway timeout (504/502)
+        await mapWithConcurrency(chunk, 3, async (resource) => {
+          try {
+            const asset = await fetchAssetMetadata(resource, authContext);
+            loaded.push(asset);
+          } catch (err) {
+            errors.push({
+              id: resource.id,
+              path: resource.path,
+              message: err.message,
+              status: err.status
+            });
+          } finally {
+            completed += 1;
+            if (onProgress) {
+              onProgress(completed, resources.length);
+            }
+          }
+        });
       }
-
-      if (onProgress) {
-        onProgress(completed, resources.length);
-      }
-    }
+    });
 
     return { assets: loaded, errors };
   }
